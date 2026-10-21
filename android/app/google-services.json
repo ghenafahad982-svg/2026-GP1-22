@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "784059274086",
+    "project_id": "raqeeb-gp1",
+    "storage_bucket": "raqeeb-gp1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:784059274086:android:c7401eadc868eb8bf5eea7",
+        "android_client_info": {
+          "package_name": "com.example.flutter_test_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA_vkMlY1b5DeyA5venD24Tm0OuC549Lzg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
