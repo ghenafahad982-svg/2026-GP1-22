@@ -1,14 +1,26 @@
-import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+import 'firebase_options.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/login_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(const RaqeebApp());
 }
 
-// الألوان المشتركة بين الوضعين
+// Shared colors for Light and Dark Mode
 class RaqeebColors {
   static const militaryGreen = Color(0xFF6F8862);
   static const alertRed = Color(0xFFB83F45);
@@ -29,7 +41,7 @@ class RaqeebColors {
       isDark ? const Color(0xFF101E1C) : const Color(0xFFE7ECE4);
 }
 
-// مسؤول عن تغيير مظهر التطبيق كاملًا
+// Main application
 class RaqeebApp extends StatefulWidget {
   const RaqeebApp({super.key});
 
@@ -40,40 +52,49 @@ class RaqeebApp extends StatefulWidget {
 class _RaqeebAppState extends State<RaqeebApp> {
   bool isDarkMode = true;
 
-@override
-void initState() {
-  super.initState();
-  loadTheme();
-}
+  late final Stream<User?> _authStream;
 
-// استرجاع المظهر المحفوظ
-Future<void> loadTheme() async {
-  final prefs = await SharedPreferences.getInstance();
+  @override
+  void initState() {
+    super.initState();
 
-  if (!mounted) return;
+    _authStream = FirebaseAuth.instance.authStateChanges();
 
-  setState(() {
-    isDarkMode = prefs.getBool('isDarkMode') ?? true;
-  });
-}
+    loadTheme();
+  }
 
-// تغيير المظهر وحفظ الاختيار
-Future<void> changeTheme(bool value) async {
-  setState(() {
-    isDarkMode = value;
-  });
+  // Load saved theme
+  Future<void> loadTheme() async {
+    final prefs = await SharedPreferences.getInstance();
 
-  final prefs = await SharedPreferences.getInstance();
-  await prefs.setBool('isDarkMode', value);
-}
+    if (!mounted) return;
+
+    setState(() {
+      isDarkMode = prefs.getBool('isDarkMode') ?? true;
+    });
+  }
+
+  // Change and save theme
+  Future<void> changeTheme(bool value) async {
+    setState(() {
+      isDarkMode = value;
+    });
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('isDarkMode', value);
+  }
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'رقيب',
       debugShowCheckedModeBanner: false,
-      themeMode: isDarkMode ? ThemeMode.dark : ThemeMode.light,
 
+      themeMode: isDarkMode
+          ? ThemeMode.dark
+          : ThemeMode.light,
+
+      // Light Theme
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.light,
@@ -85,6 +106,7 @@ Future<void> changeTheme(bool value) async {
         ),
       ),
 
+      // Dark Theme
       darkTheme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
@@ -96,14 +118,52 @@ Future<void> changeTheme(bool value) async {
         ),
       ),
 
-      home: MainNavigation(
-        isDarkMode: isDarkMode,
-        onThemeChanged: changeTheme,
+      // Authentication state listener
+      home: StreamBuilder<User?>(
+        stream: _authStream,
+        builder: (context, snapshot) {
+
+          // Waiting for Firebase authentication
+          if (snapshot.connectionState ==
+              ConnectionState.waiting) {
+            return Scaffold(
+              body: Center(
+                child: CircularProgressIndicator(
+                  color: RaqeebColors.militaryGreen,
+                ),
+              ),
+            );
+          }
+
+          // Authentication state error
+          if (snapshot.hasError) {
+            return Scaffold(
+              body: Center(
+                child: Text(
+                  'تعذر التحقق من حالة تسجيل الدخول',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
+          }
+
+          // User is signed in
+          if (snapshot.data != null) {
+            return MainNavigation(
+              isDarkMode: isDarkMode,
+              onThemeChanged: changeTheme,
+            );
+          }
+
+          // User is signed out
+          return const LoginScreen();
+        },
       ),
     );
   }
 }
 
+// Bottom navigation
 class MainNavigation extends StatefulWidget {
   final bool isDarkMode;
   final ValueChanged<bool> onThemeChanged;
@@ -144,6 +204,7 @@ class _MainNavigationState extends State<MainNavigation> {
           index: selectedIndex,
           children: pages,
         ),
+
         bottomNavigationBar: BottomAppBar(
           color: barColor,
           height: 78,
@@ -151,10 +212,19 @@ class _MainNavigationState extends State<MainNavigation> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _navItem(Icons.home_outlined, 'الرئيسية', 0),
-              _navItem(Icons.history_rounded, 'السجل', 1),
+              _navItem(
+                Icons.home_outlined,
+                'الرئيسية',
+                0,
+              ),
 
-              // زر التنبيهات الأحمر البارز
+              _navItem(
+                Icons.history_rounded,
+                'السجل',
+                1,
+              ),
+
+              // Highlighted alerts button
               Transform.translate(
                 offset: const Offset(0, -14),
                 child: GestureDetector(
@@ -203,8 +273,17 @@ class _MainNavigationState extends State<MainNavigation> {
                 ),
               ),
 
-              _navItem(Icons.person_outline_rounded, 'حسابي', 3),
-              _navItem(Icons.settings_outlined, 'الإعدادات', 4),
+              _navItem(
+                Icons.person_outline_rounded,
+                'حسابي',
+                3,
+              ),
+
+              _navItem(
+                Icons.settings_outlined,
+                'الإعدادات',
+                4,
+              ),
             ],
           ),
         ),
@@ -212,7 +291,11 @@ class _MainNavigationState extends State<MainNavigation> {
     );
   }
 
-  Widget _navItem(IconData icon, String label, int index) {
+  Widget _navItem(
+    IconData icon,
+    String label,
+    int index,
+  ) {
     final isSelected = selectedIndex == index;
     final isDark = widget.isDarkMode;
 
@@ -245,8 +328,9 @@ class _MainNavigationState extends State<MainNavigation> {
                     ? RaqeebColors.primaryText(isDark)
                     : RaqeebColors.secondaryText(isDark),
                 fontSize: 10,
-                fontWeight:
-                    isSelected ? FontWeight.bold : FontWeight.normal,
+                fontWeight: isSelected
+                    ? FontWeight.bold
+                    : FontWeight.normal,
               ),
             ),
           ],
@@ -256,7 +340,7 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 }
 
-// صفحات مؤقتة للسجل والتنبيهات
+// Temporary pages for logs and alerts
 class PlaceholderPage extends StatelessWidget {
   final String title;
 
@@ -267,7 +351,8 @@ class PlaceholderPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isDark =
+        Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
       backgroundColor: RaqeebColors.background(isDark),

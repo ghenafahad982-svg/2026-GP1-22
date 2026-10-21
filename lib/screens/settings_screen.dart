@@ -1,5 +1,6 @@
 
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class SettingsScreen extends StatefulWidget {
   final bool isDarkMode;
@@ -17,8 +18,78 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   static const militaryGreen = Color(0xFF6F8862);
+  static const alertRed = Color(0xFFB83F45);
 
   String selectedLanguage = 'العربية';
+  bool _isSigningOut = false;
+
+  // Sign out using Firebase Authentication
+  Future<void> _logout() async {
+    if (_isSigningOut) return;
+
+    final shouldLogout = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return Directionality(
+          textDirection: TextDirection.rtl,
+          child: AlertDialog(
+            title: const Text('تسجيل الخروج'),
+            content: const Text(
+              'هل أنت متأكد من رغبتك في تسجيل الخروج؟',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(false);
+                },
+                child: const Text('إلغاء'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(dialogContext).pop(true);
+                },
+                child: const Text(
+                  'تسجيل الخروج',
+                  style: TextStyle(color: alertRed),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted || shouldLogout != true) return;
+
+    setState(() {
+      _isSigningOut = true;
+    });
+
+    try {
+      await FirebaseAuth.instance.signOut();
+
+      // main.dart listens to authStateChanges()
+      // and automatically returns to LoginScreen.
+
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'تعذر تسجيل الخروج، يرجى المحاولة مرة أخرى',
+          ),
+          backgroundColor: alertRed,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSigningOut = false;
+        });
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +158,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
               const SizedBox(height: 16),
 
-              // اختيار اللغة
+              // Language selection
               Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
@@ -144,7 +215,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
               const SizedBox(height: 14),
 
-              // اختيار المظهر
+              // Theme selection
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -268,6 +339,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
               ),
+
+              const SizedBox(height: 34),
+
+              // Account section
+              Row(
+                children: [
+                  const Icon(
+                    Icons.account_circle_outlined,
+                    color: militaryGreen,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'الحساب',
+                    style: TextStyle(
+                      color: primaryText,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 16),
+
+              // Firebase Logout button
+              SizedBox(
+                width: double.infinity,
+                height: 58,
+                child: OutlinedButton.icon(
+                  onPressed: _isSigningOut ? null : _logout,
+                  icon: _isSigningOut
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            color: alertRed,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.logout_rounded,
+                          color: alertRed,
+                        ),
+                  label: Text(
+                    _isSigningOut
+                        ? 'جارٍ تسجيل الخروج...'
+                        : 'تسجيل الخروج',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: alertRed,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    backgroundColor: cardColor,
+                    side: BorderSide(
+                      color: borderColor,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 24),
             ],
           ),
         ),
