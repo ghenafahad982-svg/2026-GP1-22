@@ -1,10 +1,70 @@
 
 import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
   static const militaryGreen = Color(0xFF6F8862);
+
+  String deviceStatus = 'checking';
+
+  Timer? statusTimer;
+
+  static const String statusUrl =
+      'http://192.168.100.135:5001/raqeeb-gp1/us-central1/getDeviceStatus';
+
+  @override
+  void initState() {
+    super.initState();
+
+    checkDeviceStatus();
+
+    statusTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => checkDeviceStatus(),
+    );
+  }
+
+  Future<void> checkDeviceStatus() async {
+    try {
+      final response = await http
+          .get(Uri.parse(statusUrl))
+          .timeout(const Duration(seconds: 4));
+
+      if (!mounted) return;
+
+      setState(() {
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+
+          deviceStatus =
+              data['status'] == 'online' ? 'online' : 'offline';
+        } else {
+          deviceStatus = 'error';
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        deviceStatus = 'error';
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    statusTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +94,31 @@ class HomeScreen extends StatelessWidget {
     final borderColor = isDark
         ? militaryGreen.withValues(alpha: 0.35)
         : const Color(0xFFDCE4D9);
+    final isOnline = deviceStatus == 'online';
+final isChecking = deviceStatus == 'checking';
+final hasError = deviceStatus == 'error';
+
+final statusText = isOnline
+    ? 'متصل'
+    : isChecking
+        ? 'جاري التحقق'
+        : hasError
+            ? 'تعذر التحقق'
+            : 'غير متصل';
+
+final statusColor = isOnline
+    ? const Color(0xFF4CAF50)
+    : isChecking || hasError
+        ? const Color(0xFFC48A66)
+        : const Color(0xFFC45454);
+
+final statusMessage = isOnline
+    ? 'كاميرا رقيب متصلة بالسيرفر'
+    : isChecking
+        ? 'جاري التحقق من اتصال الجهاز'
+        : hasError
+            ? 'تعذر الوصول إلى السيرفر'
+            : 'كاميرا رقيب غير متصلة بالسيرفر';    
 
     return Directionality(
       textDirection: TextDirection.rtl,
@@ -180,22 +265,20 @@ class HomeScreen extends StatelessWidget {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(
-                                Icons.circle,
-                                color: Color(0xFFC48A66),
-                                size: 8,
-                              ),
+                              Icon(
+  Icons.circle,
+  color: statusColor,
+  size: 8,
+),
                               const SizedBox(width: 7),
                               Text(
-                                'غير متصل',
-                                style: TextStyle(
-                                  color: isDark
-                                      ? const Color(0xFFF3E8DE)
-                                      : const Color(0xFF80543A),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
+  statusText,
+  style: TextStyle(
+    color: statusColor,
+    fontSize: 12,
+    fontWeight: FontWeight.w600,
+  ),
+),
                             ],
                           ),
                         ),
@@ -221,7 +304,7 @@ class HomeScreen extends StatelessWidget {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'لم يتم الاتصال بكاميرا رقيب بعد',
+                              statusMessage,
                               style: TextStyle(
                                 color: secondaryText,
                                 fontSize: 13,
