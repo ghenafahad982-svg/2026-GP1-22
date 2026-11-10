@@ -231,7 +231,7 @@ def create_video_upload_url():
         .create_signed_upload_url(video_path)
     )
 
-    upload_token = response.token
+    upload_token = response.get("token")
 
     return jsonify({
         "success": True,
