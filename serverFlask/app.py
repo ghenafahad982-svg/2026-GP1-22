@@ -7,10 +7,11 @@ from functools import wraps
 from urllib.parse import quote
 
 import firebase_admin
-from firebase_admin import credentials, firestore, auth
+from firebase_admin import credentials, firestore, auth, messaging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client
+from google.api_core.exceptions import Conflict
 
 app = Flask(__name__)
 # Allow Flutter Web development requests to read incidents.
@@ -60,6 +61,57 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(firebase_credential)
 
 db = firestore.client()
+
+# Send FCM alerts to officers assigned to the wearable device
+def send_incident_notifications(device_id, event_id, detection_type):
+    officers = (
+        db.collection("Users")
+        .where("deviceId", "==", device_id)
+        .stream()
+    )
+
+    notifications_sent = 0
+
+    for officer in officers:
+        officer_data = officer.to_dict() or {}
+
+        if officer_data.get("role") != "officer":
+            continue
+
+        fid = officer_data.get("fcmInstallationId")
+
+        if not isinstance(fid, str) or not fid.strip():
+            continue
+
+        message = messaging.Message(
+            fid=fid.strip(),
+            data={
+                "incidentId": str(event_id),
+                "title": "Raqeeb Alert",
+                "body": f"Weapon detected: {detection_type}",
+                "type": str(detection_type),
+                "sentAt": str(
+                    int(datetime.now(timezone.utc).timestamp() * 1000)
+                ),
+            },
+            android=messaging.AndroidConfig(
+                priority="high"
+            ),
+        )
+
+        try:
+            messaging.send(message)
+            notifications_sent += 1
+            app.logger.info(
+                "FCM alert sent for incident %s", event_id
+            )
+        except Exception:
+            app.logger.exception(
+                "FCM failed for incident %s", event_id
+            )
+
+    return notifications_sent
+
 
 # Supabase connection
 supabase = create_client(
@@ -199,6 +251,85 @@ def device_status():
         )
     })
 
+
+# Receive a confirmed weapon detection and send an immediate FCM alert
+@app.route("/incident/start", methods=["POST"])
+@require_device_token
+def start_incident():
+    data = request.get_json(silent=True) or {}
+
+    event_id = str(data.get("eventId") or "").strip()
+    device_id = str(data.get("deviceId") or "").strip()
+    detection_type = str(
+        data.get("detectionType") or ""
+    ).strip().lower()
+
+    if device_id != "raqeeb-001":
+        return jsonify({
+            "success": False,
+            "message": "Invalid device ID"
+        }), 400
+
+    try:
+        uuid.UUID(event_id)
+    except (ValueError, AttributeError):
+        return jsonify({
+            "success": False,
+            "message": "A valid UUID eventId is required"
+        }), 400
+
+    if detection_type not in ("pistol", "knife"):
+        return jsonify({
+            "success": False,
+            "message": "Invalid detection type"
+        }), 400
+
+    confidence = data.get("confidence")
+
+    if confidence is not None:
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            return jsonify({
+                "success": False,
+                "message": "Invalid confidence"
+            }), 400
+
+        if not 0 <= confidence <= 1:
+            return jsonify({
+                "success": False,
+                "message": "Confidence must be between 0 and 1"
+            }), 400
+
+    incident_ref = db.collection("incidents").document(event_id)
+
+    try:
+        incident_ref.create({
+            "eventId": event_id,
+            "deviceId": device_id,
+            "detectionType": detection_type,
+            "confidence": confidence,
+            "createdAt": firestore.SERVER_TIMESTAMP,
+        })
+    except Conflict:
+        return jsonify({
+            "success": True,
+            "eventId": event_id,
+            "duplicate": True,
+            "notificationsSent": 0
+        }), 200
+
+    notifications_sent = send_incident_notifications(
+        device_id,
+        event_id,
+        detection_type
+    )
+
+    return jsonify({
+        "success": True,
+        "eventId": event_id,
+        "notificationsSent": notifications_sent
+    }), 201
 
 # Create signed video upload URL
 @app.route("/video/upload-url", methods=["POST"])
