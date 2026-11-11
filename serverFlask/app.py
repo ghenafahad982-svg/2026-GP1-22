@@ -293,31 +293,44 @@ def complete_video_upload():
 
 @app.route("/video/download-url", methods=["POST"])
 @require_device_token
-def create_video_download_url():
+
+@app.route("/video/upload-url", methods=["POST"])
+@require_device_token
+def create_video_upload_url():
 
     data = request.get_json(silent=True) or {}
 
-    video_path = data.get("videoPath")
+    event_id = data.get("eventId")
 
-    if not video_path:
-        return jsonify({
-            "success": False,
-            "message": "videoPath is required"
-        }), 400
+    if not event_id:
+        event_id = str(uuid.uuid4())
+
+    filename = f"{uuid.uuid4()}.h264"
+    video_path = f"incidents/{event_id}/{filename}"
 
     response = (
         supabase.storage
         .from_(SUPABASE_BUCKET)
-        .create_signed_url(video_path, 3600)
+        .create_signed_upload_url(video_path)
     )
 
-    # مكتبة Supabase Python ترجع بيانات الرابط ضمن response
-    signed_url = response.get("signedURL")
+    upload_token = response.get("token")
+
+    upload_url = (
+        f"{SUPABASE_URL}/storage/v1/object/upload/sign/"
+        f"{SUPABASE_BUCKET}/{quote(video_path, safe='/')}"
+        f"?token={quote(upload_token)}"
+    )
 
     return jsonify({
         "success": True,
-        "signedUrl": signed_url
+        "eventId": event_id,
+        "bucket": SUPABASE_BUCKET,
+        "path": video_path,
+        "token": upload_token,
+        "uploadUrl": upload_url
     })
+
 
 
 # --------------------------------------------------
