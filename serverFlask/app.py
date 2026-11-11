@@ -18,8 +18,7 @@ app = Flask(__name__)
 CORS(
     app,
     resources={
-        r"/incidents": {
-            "origins": [
+r"/incidents(?:/[^/]+/video-url)?": {            "origins": [
                 r"^http://localhost(:[0-9]+)?$",
                 r"^http://127\.0\.0\.1(:[0-9]+)?$",
             ],
@@ -383,6 +382,96 @@ def get_incidents():
     return jsonify({
         "success": True,
         "incidents": incidents
+    })
+
+# Secure incident video playback for officers
+@app.route("/incidents/<event_id>/video-url", methods=["GET"])
+@require_officer_auth
+def get_incident_video_url(event_id):
+    officer_uid = request.officer_uid
+
+    officer_doc = (
+        db.collection("Users")
+        .document(officer_uid)
+        .get()
+    )
+
+    if not officer_doc.exists:
+        return jsonify({
+            "success": False,
+            "message": "Officer profile not found"
+        }), 403
+
+    officer = officer_doc.to_dict() or {}
+
+    if officer.get("role") != "officer":
+        return jsonify({
+            "success": False,
+            "message": "Officer access required"
+        }), 403
+
+    device_id = officer.get("deviceId")
+
+    if not device_id:
+        return jsonify({
+            "success": False,
+            "message": "No assigned device"
+        }), 403
+
+    incident_doc = (
+        db.collection("incidents")
+        .document(event_id)
+        .get()
+    )
+
+    if not incident_doc.exists:
+        return jsonify({
+            "success": False,
+            "message": "Incident not found"
+        }), 404
+
+    incident = incident_doc.to_dict() or {}
+
+    # The officer may only access their assigned device.
+    if incident.get("deviceId") != device_id:
+        return jsonify({
+            "success": False,
+            "message": "Access denied"
+        }), 403
+
+    video_path = incident.get("videoPath")
+    bucket = incident.get("bucket")
+
+    if not video_path or bucket != SUPABASE_BUCKET:
+        return jsonify({
+            "success": False,
+            "message": "Video unavailable"
+        }), 404
+
+    if not video_path.startswith(f"incidents/{event_id}/"):
+        return jsonify({
+            "success": False,
+            "message": "Invalid video path"
+        }), 400
+
+    response = (
+        supabase.storage
+        .from_(SUPABASE_BUCKET)
+        .create_signed_url(video_path, 300)
+    )
+
+    signed_url = response.get("signedURL")
+
+    if not signed_url:
+        return jsonify({
+            "success": False,
+            "message": "Could not generate video URL"
+        }), 500
+
+    return jsonify({
+        "success": True,
+        "eventId": event_id,
+        "signedUrl": signed_url
     })
 
 # Run Flask server
