@@ -9,10 +9,25 @@ from urllib.parse import quote
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from supabase import create_client
 
 app = Flask(__name__)
-
+# Allow Flutter Web development requests to read incidents.
+# Authentication is still required by the endpoint.
+CORS(
+    app,
+    resources={
+        r"/incidents": {
+            "origins": [
+                r"^http://localhost(:[0-9]+)?$",
+                r"^http://127\.0\.0\.1(:[0-9]+)?$",
+            ],
+            "methods": ["GET", "OPTIONS"],
+            "allow_headers": ["Authorization", "Content-Type"],
+        }
+    },
+)
 # Environment variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY")
