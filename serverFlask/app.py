@@ -9,7 +9,7 @@ from firebase_admin import credentials, firestore
 
 from flask import Flask, request, jsonify
 from supabase import create_client
-
+from urllib.parse import quote
 
 # --------------------------------------------------
 # 1. تشغيل Flask
@@ -221,8 +221,7 @@ def create_video_upload_url():
         event_id = str(uuid.uuid4())
 
     # اسم ملف آمن وبسيط
-    filename = f"{uuid.uuid4()}.mp4"
-
+filename = f"{uuid.uuid4()}.h264"
     video_path = f"incidents/{event_id}/{filename}"
 
     response = (
@@ -232,13 +231,18 @@ def create_video_upload_url():
     )
 
     upload_token = response.get("token")
-
+upload_url = (
+    f"{SUPABASE_URL}/storage/v1/object/upload/sign/"
+    f"{SUPABASE_BUCKET}/{quote(video_path, safe='/')}"
+    f"?token={quote(upload_token)}"
+)
     return jsonify({
         "success": True,
         "eventId": event_id,
         "bucket": SUPABASE_BUCKET,
         "path": video_path,
         "token": upload_token
+        "uploadUrl": upload_url,
     })
 
 
