@@ -118,10 +118,12 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
     _lastLocationRefresh = DateTime.now();
     try {
       if (!await Geolocator.isLocationServiceEnabled()) {
-        if (mounted) setState(() {
+        if (mounted) {
+          setState(() {
           _gpsAvailable = false;
           _setFallbackCoordinates();
         });
+        }
         _checkClock();
         return;
       }
@@ -131,10 +133,12 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
       }
       if (permission != LocationPermission.whileInUse &&
           permission != LocationPermission.always) {
-        if (mounted) setState(() {
+        if (mounted) {
+          setState(() {
           _gpsAvailable = false;
           _setFallbackCoordinates();
         });
+        }
         _checkClock();
         return;
       }

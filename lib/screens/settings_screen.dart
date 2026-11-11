@@ -58,11 +58,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       await FirebaseAuth.instance.signOut();
     } catch (_) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(tr(context, 'تعذر تسجيل الخروج، يرجى المحاولة مرة أخرى',
             'Could not sign out. Please try again')),
         backgroundColor: RaqeebColors.lightDanger,
       ));
+      }
     } finally {
       if (mounted) setState(() => _isSigningOut = false);
     }

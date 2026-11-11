@@ -65,8 +65,10 @@ class _LoginScreenState extends State<LoginScreen> {
       }
       _showError(message);
     } catch (_) {
-      if (mounted) _showError(tr(context, 'حدث خطأ غير متوقع، يرجى المحاولة مرة أخرى',
+      if (mounted) {
+        _showError(tr(context, 'حدث خطأ غير متوقع، يرجى المحاولة مرة أخرى',
           'Unexpected error. Please try again'));
+      }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
