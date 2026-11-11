@@ -7,7 +7,7 @@ from functools import wraps
 from urllib.parse import quote
 
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 from flask import Flask, request, jsonify
 from supabase import create_client
 
@@ -68,6 +68,32 @@ def require_device_token(function):
 
     return wrapper
 
+# Officer authentication using Firebase ID Token
+def require_officer_auth(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        authorization = request.headers.get("Authorization", "")
+
+        if not authorization.startswith("Bearer "):
+            return jsonify({
+                "success": False,
+                "message": "Authentication required"
+            }), 401
+
+        token = authorization.removeprefix("Bearer ").strip()
+
+        try:
+            decoded_token = auth.verify_id_token(token)
+        except Exception:
+            return jsonify({
+                "success": False,
+                "message": "Invalid or expired token"
+            }), 401
+
+        request.officer_uid = decoded_token["uid"]
+        return function(*args, **kwargs)
+
+    return wrapper
 
 # Home
 @app.route("/", methods=["GET"])
@@ -273,6 +299,76 @@ def create_video_download_url():
         "signedUrl": signed_url
     })
 
+# Get incidents assigned to the authenticated officer
+@app.route("/incidents", methods=["GET"])
+@require_officer_auth
+def get_incidents():
+    officer_uid = request.officer_uid
+
+    officer_doc = (
+        db.collection("Users")
+        .document(officer_uid)
+        .get()
+    )
+
+    if not officer_doc.exists:
+        return jsonify({
+            "success": False,
+            "message": "Officer profile not found"
+        }), 403
+
+    officer = officer_doc.to_dict() or {}
+
+    if officer.get("role") != "officer":
+        return jsonify({
+            "success": False,
+            "message": "Officer access required"
+        }), 403
+
+    device_id = officer.get("deviceId")
+
+    if not device_id:
+        return jsonify({
+            "success": False,
+            "message": "No assigned device"
+        }), 403
+
+    documents = (
+        db.collection("incidents")
+        .where("deviceId", "==", device_id)
+        .stream()
+    )
+
+    incidents = []
+
+    for doc in documents:
+        data = doc.to_dict() or {}
+        created_at = data.get("createdAt")
+
+        incidents.append({
+            "eventId": doc.id,
+            "deviceId": data.get("deviceId"),
+            "detectionType": data.get(
+                "detectionType", "unknown"
+            ),
+            "confidence": data.get("confidence"),
+            "createdAt": (
+                created_at.isoformat()
+                if created_at else None
+            ),
+            "status": data.get("status", "pending"),
+            "videoAvailable": bool(data.get("videoPath"))
+        })
+
+    incidents.sort(
+        key=lambda item: item["createdAt"] or "",
+        reverse=True
+    )
+
+    return jsonify({
+        "success": True,
+        "incidents": incidents
+    })
 
 # Run Flask server
 if __name__ == "__main__":
