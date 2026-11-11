@@ -58,6 +58,7 @@ class IncidentApiTests(unittest.TestCase):
     def setUp(self):
         self.client = self.raqeeb.app.test_client()
         self.db.reset_mock()
+        self.db.collection.return_value.document.return_value.get.side_effect = None
         self.auth.verify_id_token = MagicMock(return_value={"uid": "officer-uid"})
         self.user_doc = MagicMock()
         self.user_doc.exists = True
@@ -115,6 +116,86 @@ class IncidentApiTests(unittest.TestCase):
         )
         self.assertNotIn("videoPath", str(payload))
         self.assertNotIn("SUPABASE_SECRET_KEY", str(payload))
+
+    def test_video_without_login_returns_401(self):
+        response = self.client.get(
+            "/incidents/event-test-1/video-url"
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    def test_video_from_other_device_returns_403(self):
+        incident_doc = MagicMock()
+        incident_doc.exists = True
+        incident_doc.to_dict.return_value = {
+            "deviceId": "raqeeb-999",
+            "videoPath": "incidents/event-test-1/clip.mp4",
+            "bucket": self.raqeeb.SUPABASE_BUCKET,
+        }
+
+        document_get = (
+            self.db.collection.return_value
+            .document.return_value.get
+        )
+        document_get.side_effect = [
+            self.user_doc,
+            incident_doc,
+        ]
+
+        response = self.client.get(
+            "/incidents/event-test-1/video-url",
+            headers={
+                "Authorization": "Bearer example-test-token"
+            },
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_authorized_officer_receives_video_url(self):
+        incident_doc = MagicMock()
+        incident_doc.exists = True
+        incident_doc.to_dict.return_value = {
+            "deviceId": "raqeeb-001",
+            "videoPath": "incidents/event-test-1/clip.mp4",
+            "bucket": self.raqeeb.SUPABASE_BUCKET,
+        }
+
+        document_get = (
+            self.db.collection.return_value
+            .document.return_value.get
+        )
+        document_get.side_effect = [
+            self.user_doc,
+            incident_doc,
+        ]
+
+        signed_url = "https://example.invalid/temporary-video"
+
+        storage_bucket = (
+            self.raqeeb.supabase.storage
+            .from_.return_value
+        )
+        storage_bucket.create_signed_url.return_value = {
+            "signedURL": signed_url
+        }
+
+        response = self.client.get(
+            "/incidents/event-test-1/video-url",
+            headers={
+                "Authorization": "Bearer example-test-token"
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.get_json()
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["signedUrl"], signed_url)
+
+        storage_bucket.create_signed_url.assert_called_once_with(
+            "incidents/event-test-1/clip.mp4",
+            300,
+        )
 
 
 if __name__ == "__main__":
