@@ -1,5 +1,5 @@
 Flask
 gunicorn
 supabase
-firebase-admin
+firebase-admin>=7.5.0,<8
 flask-cors>=5.0,<7.0
