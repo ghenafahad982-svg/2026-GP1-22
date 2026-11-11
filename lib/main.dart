@@ -3,12 +3,39 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'firebase_options.dart';
+import 'services/notification_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/login_screen.dart';
+
+
+@pragma('vm:entry-point')
+Future<void> raqeebBackgroundHandler(RemoteMessage message) async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  // Avoid duplicate notifications.
+  if (message.notification != null) return;
+
+  final incidentId = message.data['incidentId']?.toString();
+  if (incidentId == null || incidentId.isEmpty) return;
+
+  await NotificationService.instance.initialize();
+
+  await NotificationService.instance.showIncidentNotification(
+    incidentId: incidentId,
+    title: message.data['title']?.toString() ?? 'Raqeeb Alert',
+    body: message.data['body']?.toString() ?? 'Threat detected',
+  );
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,8 +44,89 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
+  // Listen for registration before calling register().
+  FirebaseMessaging.instance.onRegistered.listen(
+    (String installationId) async {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      try {
+        await FirebaseFirestore.instance
+            .collection('Users')
+            .doc(user.uid)
+            .update({
+          'fcmInstallationId': installationId,
+          'fcmUpdatedAt': FieldValue.serverTimestamp(),
+        });
+
+        debugPrint('FCM registration saved successfully');
+      } catch (e) {
+        debugPrint('FCM registration save error: $e');
+      }
+    },
+    onError: (Object error) {
+      debugPrint('FCM registration listener error: $error');
+    },
+  );
+
+  // Register after the user signs in.
+  FirebaseAuth.instance.authStateChanges().listen(
+    (user) async {
+      if (user == null) return;
+
+      try {
+        await FirebaseMessaging.instance.register();
+      } catch (e) {
+        debugPrint('FCM registration error: $e');
+      }
+    },
+  );
+
+  FirebaseMessaging.onBackgroundMessage(
+    raqeebBackgroundHandler,
+  );
+
+  await NotificationService.instance.initialize();
+
+  // Receive FCM notifications while the app is open.
+  FirebaseMessaging.onMessage.listen((RemoteMessage message) async {
+    final incidentId = message.data['incidentId']?.toString();
+
+    if (incidentId == null || incidentId.isEmpty) {
+      debugPrint('FCM message received without incidentId');
+      return;
+    }
+
+    await NotificationService.instance.showIncidentNotification(
+      incidentId: incidentId,
+      title: message.notification?.title ??
+          message.data['title']?.toString() ??
+          'Raqeeb Alert',
+      body: message.notification?.body ??
+          message.data['body']?.toString() ??
+          'Threat detected',
+    );
+  });
+
   runApp(const RaqeebApp());
+
+  try {
+    final settings =
+        await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+
+    debugPrint(
+      'FCM Permission: ${settings.authorizationStatus}',
+    );
+  } catch (e) {
+    debugPrint('FCM Permission Error: $e');
+  }
 }
+
+
 
 // Shared colors for Light and Dark Mode
 class RaqeebColors {
