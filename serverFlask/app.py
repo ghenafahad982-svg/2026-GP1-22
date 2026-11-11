@@ -3,14 +3,11 @@ import json
 import uuid
 from datetime import datetime, timezone, timedelta
 from functools import wraps
-
 import firebase_admin
 from firebase_admin import credentials, firestore
-
 from flask import Flask, request, jsonify
 from supabase import create_client
 from urllib.parse import quote
-
 # --------------------------------------------------
 # 1. تشغيل Flask
 # --------------------------------------------------
@@ -219,24 +216,20 @@ def create_video_upload_url():
 
     if not event_id:
         event_id = str(uuid.uuid4())
-
     # اسم ملف آمن وبسيط
 filename = f"{uuid.uuid4()}.h264"
     video_path = f"incidents/{event_id}/{filename}"
-
     response = (
         supabase.storage
         .from_(SUPABASE_BUCKET)
         .create_signed_upload_url(video_path)
     )
-
-    upload_token = response.get("token")
+upload_token = response.get("token")
 upload_url = (
     f"{SUPABASE_URL}/storage/v1/object/upload/sign/"
     f"{SUPABASE_BUCKET}/{quote(video_path, safe='/')}"
     f"?token={quote(upload_token)}"
-)
-    return jsonify({
+) return jsonify({
         "success": True,
         "eventId": event_id,
         "bucket": SUPABASE_BUCKET,
