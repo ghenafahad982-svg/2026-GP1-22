@@ -6,7 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../incident_store.dart';
 import 'incident_widgets.dart';
 import '../raqeeb_ui.dart';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -101,20 +101,52 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Icon(Icons.shield_outlined, color: accent, size: 25)),
           ]),
           const SizedBox(height: 36),
-          StreamBuilder<User?>(
-            stream: FirebaseAuth.instance.userChanges(),
-            builder: (context, snapshot) {
-              final name = snapshot.data?.displayName?.trim() ??
-                  FirebaseAuth.instance.currentUser?.displayName?.trim();
-              final hasName = name != null && name.isNotEmpty;
-              return Text(
-                hasName
-                    ? tr(context, 'مرحبًا، $name', 'Hello, $name')
-                    : tr(context, 'مرحبًا بك، أيها الضابط', 'Welcome, Officer'),
-                style: TextStyle(color: text, fontSize: 20, fontWeight: FontWeight.bold),
-              );
-            },
+          
+StreamBuilder<User?>(
+  stream: FirebaseAuth.instance.userChanges(),
+  builder: (context, authSnapshot) {
+    final user = authSnapshot.data;
+
+    if (user == null) {
+      return const SizedBox.shrink();
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('Users')
+          .doc(user.uid)
+          .snapshots(),
+      builder: (context, userSnapshot) {
+        final data = userSnapshot.data?.data();
+        
+
+        final firestoreName =
+            (data?['name'] as String?)?.trim();
+
+        final authName = user.displayName?.trim();
+
+        final name = (firestoreName != null &&
+                firestoreName.isNotEmpty)
+            ? firestoreName
+            : (authName != null && authName.isNotEmpty)
+                ? authName
+                : null;
+
+        return Text(
+          name != null
+              ? tr(context, 'مرحبًا بك، $name', 'Welcome, $name')
+              : tr(context, 'مرحبًا بك', 'Welcome'),
+          style: TextStyle(
+            color: text,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
           ),
+        );
+      },
+    );
+  },
+),
+
           const SizedBox(height: 12),
           Text(tr(context, 'لوحة المتابعة', 'Dashboard'),
               style: TextStyle(color: text, fontSize: 25, fontWeight: FontWeight.bold)),
