@@ -1,7 +1,7 @@
 
 import 'dart:async';
 import 'dart:convert';
-
+import 'incident_video_player_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
@@ -79,6 +79,93 @@ class _AlertsScreenState extends State<AlertsScreen> {
     return (decoded['incidents'] as List)
         .whereType<Map<String, dynamic>>()
         .toList();
+  }
+
+  Future<void> _openIncidentVideo(
+    BuildContext context,
+    String eventId,
+  ) async {
+    try {
+      final videoUrl = await _fetchVideoUrl(eventId);
+
+      if (!context.mounted) return;
+
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => IncidentVideoPlayerPage(
+            videoUrl: videoUrl,
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            tr(
+              context,
+              'تعذر فتح تسجيل الحادث',
+              'Could not open incident recording',
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<String> _fetchVideoUrl(String eventId) async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      throw Exception('not_signed_in');
+    }
+
+    final token = await user.getIdToken();
+
+    if (token == null || token.isEmpty) {
+      throw Exception('missing_token');
+    }
+
+    final uri = Uri.parse(
+      'https://raqeebserver.onrender.com/incidents/'
+      '${Uri.encodeComponent(eventId)}/video-url',
+    );
+
+    final response = await http.get(
+      uri,
+      headers: {
+        'Authorization': 'Bearer $token',
+        'Accept': 'application/json',
+      },
+    ).timeout(const Duration(seconds: 90));
+
+    if (response.statusCode == 401) {
+      throw Exception('unauthorized');
+    }
+
+    if (response.statusCode == 403) {
+      throw Exception('forbidden');
+    }
+
+    if (response.statusCode == 404) {
+      throw Exception('video_unavailable');
+    }
+
+    if (response.statusCode != 200) {
+      throw Exception('video_server_error_${response.statusCode}');
+    }
+
+    final data = jsonDecode(response.body);
+
+    if (data is! Map<String, dynamic> ||
+        data['success'] != true ||
+        data['signedUrl'] is! String ||
+        (data['signedUrl'] as String).isEmpty) {
+      throw const FormatException('Invalid video URL response');
+    }
+
+    return data['signedUrl'] as String;
   }
 
   String _errorMessage(BuildContext context, Object error) {
@@ -221,23 +308,30 @@ class _AlertsScreenState extends State<AlertsScreen> {
               style: TextStyle(color: RaqeebColors.text(dark)),
             ),
             const SizedBox(height: 8),
+            
+          if (incident['videoAvailable'] == true)
+            OutlinedButton.icon(
+              onPressed: () {
+                final eventId = incident['eventId']?.toString() ?? '';
+
+                if (eventId.isNotEmpty) {
+                  _openIncidentVideo(context, eventId);
+                }
+              },
+              icon: const Icon(Icons.play_circle_outline),
+              label: Text(
+                tr(context, 'مشاهدة التسجيل', 'View Recording'),
+              ),
+            )
+          else
             Text(
-              incident['videoAvailable'] == true
-                  ? tr(
-                      context,
-                      'التسجيل محفوظ — ربط المشاهدة قيد التجهيز',
-                      'Recording saved — playback integration pending',
-                    )
-                  : tr(
-                      context,
-                      'لا يوجد تسجيل متاح',
-                      'No recording available',
-                    ),
+              tr(context, 'لا يوجد تسجيل متاح', 'No recording available'),
               style: TextStyle(
                 color: RaqeebColors.secondary(dark),
                 fontSize: 12,
               ),
             ),
+
           ],
         ),
       ),
