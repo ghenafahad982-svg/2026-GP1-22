@@ -1,394 +1,223 @@
-
-import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-
+import 'package:firebase_auth/firebase_auth.dart';
+import '../incident_store.dart';
+import 'incident_widgets.dart';
+import '../raqeeb_ui.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  static const militaryGreen = Color(0xFF6F8862);
-
   String deviceStatus = 'checking';
-
-  Timer? statusTimer;
-
+  Timer? _statusTimer;
+  // Keep the original Firebase emulator endpoint for local testing.
   static const String statusUrl =
       'http://192.168.100.135:5001/raqeeb-gp1/us-central1/getDeviceStatus';
 
   @override
   void initState() {
     super.initState();
-
     checkDeviceStatus();
-
-    statusTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => checkDeviceStatus(),
-    );
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) => checkDeviceStatus());
   }
 
   Future<void> checkDeviceStatus() async {
     try {
-      final response = await http
-          .get(Uri.parse(statusUrl))
+      final response = await http.get(Uri.parse(statusUrl))
           .timeout(const Duration(seconds: 4));
-
       if (!mounted) return;
-
       setState(() {
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-
-          deviceStatus =
-              data['status'] == 'online' ? 'online' : 'offline';
+          deviceStatus = data['status'] == 'online' ? 'online' : 'offline';
         } else {
           deviceStatus = 'error';
         }
       });
-    } catch (e) {
-      if (!mounted) return;
-
-      setState(() {
-        deviceStatus = 'error';
-      });
+    } catch (_) {
+      if (mounted) setState(() => deviceStatus = 'error');
     }
   }
 
   @override
   void dispose() {
-    statusTimer?.cancel();
+    _statusTimer?.cancel();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // معرفة المظهر المختار من الإعدادات
-    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final text = RaqeebColors.text(dark);
+    final secondary = RaqeebColors.secondary(dark);
+    final accent = RaqeebColors.accent(dark);
+    final card = RaqeebColors.card(dark);
+    final border = RaqeebColors.border(dark);
+    final checking = deviceStatus == 'checking';
+    final error = deviceStatus == 'error';
+    final online = deviceStatus == 'online';
+    final statusLabel = checking
+        ? tr(context, 'جاري التحقق', 'Checking')
+        : error
+            ? tr(context, 'تعذر التحقق', 'Unavailable')
+            : online
+                ? tr(context, 'متصل', 'Online')
+                : tr(context, 'غير متصل', 'Offline');
+    final statusColor = checking || error
+        ? RaqeebColors.warning(dark)
+        : online ? accent : RaqeebColors.danger(dark);
+    final statusMessage = checking
+        ? tr(context, 'جاري التحقق من اتصال الجهاز', 'Checking device connectivity')
+        : error
+            ? tr(context, 'تعذر الوصول إلى السيرفر', 'Could not reach the server')
+            : online
+                ? tr(context, 'جهاز رقيب متصل بالسيرفر', 'Raqeeb device is connected to the server')
+                : tr(context, 'جهاز رقيب غير متصل بالسيرفر', 'Raqeeb device is disconnected from the server');
 
-    final background = isDark
-        ? const Color(0xFF111A1D)
-        : const Color(0xFFF5F6F1);
+    return Scaffold(
+      backgroundColor: RaqeebColors.background(dark),
+      body: SafeArea(child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 20),
+        children: [
+          Row(children: [
+            Container(width: 56, height: 56, padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(16)),
+              child: Image.asset('assets/images/raqeeb_logo.png', fit: BoxFit.contain)),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(tr(context, 'رقيب', 'Raqeeb'),
+                  style: TextStyle(color: text, fontSize: 24, fontWeight: FontWeight.bold)),
+              Text(tr(context, 'نظام المراقبة الذكي', 'Intelligent Monitoring System'),
+                  style: TextStyle(color: secondary, fontSize: 12)),
+            ])),
+            Container(padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(14)),
+              child: Icon(Icons.shield_outlined, color: accent, size: 25)),
+          ]),
+          const SizedBox(height: 36),
+          
+StreamBuilder<User?>(
+  stream: FirebaseAuth.instance.userChanges(),
+  builder: (context, authSnapshot) {
+    final user = authSnapshot.data;
 
-    final cardColor = isDark
-        ? const Color(0xFF1C2A2D)
-        : Colors.white;
+    if (user == null) {
+      return const SizedBox.shrink();
+    }
 
-    final primaryText = isDark
-        ? const Color(0xFFF2F6F5)
-        : const Color(0xFF1D3027);
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('Users')
+          .doc(user.uid)
+          .snapshots(),
+      builder: (context, userSnapshot) {
+        final data = userSnapshot.data?.data();
+        
 
-    final secondaryText = isDark
-        ? const Color(0xFFAAB7B0)
-        : const Color(0xFF647568);
+        final firestoreName =
+            (data?['name'] as String?)?.trim();
 
-    final innerCardColor = isDark
-        ? const Color(0xFF101F1C)
-        : const Color(0xFFF0F3EC);
+        final authName = user.displayName?.trim();
 
-    final borderColor = isDark
-        ? militaryGreen.withValues(alpha: 0.35)
-        : const Color(0xFFDCE4D9);
-    final isOnline = deviceStatus == 'online';
-final isChecking = deviceStatus == 'checking';
-final hasError = deviceStatus == 'error';
+        final name = (firestoreName != null &&
+                firestoreName.isNotEmpty)
+            ? firestoreName
+            : (authName != null && authName.isNotEmpty)
+                ? authName
+                : null;
 
-final statusText = isOnline
-    ? 'متصل'
-    : isChecking
-        ? 'جاري التحقق'
-        : hasError
-            ? 'تعذر التحقق'
-            : 'غير متصل';
-
-final statusColor = isOnline
-    ? const Color(0xFF4CAF50)
-    : isChecking || hasError
-        ? const Color(0xFFC48A66)
-        : const Color(0xFFC45454);
-
-final statusMessage = isOnline
-    ? 'كاميرا رقيب متصلة بالسيرفر'
-    : isChecking
-        ? 'جاري التحقق من اتصال الجهاز'
-        : hasError
-            ? 'تعذر الوصول إلى السيرفر'
-            : 'كاميرا رقيب غير متصلة بالسيرفر';    
-
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        backgroundColor: background,
-        body: SafeArea(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 22,
-              vertical: 20,
-            ),
-            children: [
-              // Header
-              Row(
-                children: [
-                  Container(
-                    width: 56,
-                    height: 56,
-                    padding: const EdgeInsets.all(5),
-                    decoration: BoxDecoration(
-                      color: cardColor,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Image.asset(
-                      'assets/images/raqeeb_logo.png',
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-
-                  const SizedBox(width: 12),
-
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'رقيب',
-                          style: TextStyle(
-                            color: primaryText,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          'نظام المراقبة الذكي',
-                          style: TextStyle(
-                            color: secondaryText,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: cardColor,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Icon(
-                      Icons.shield_outlined,
-                      color: militaryGreen,
-                      size: 25,
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 36),
-
-              Text(
-                'لوحة المتابعة',
-                style: TextStyle(
-                  color: primaryText,
-                  fontSize: 25,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-
-              const SizedBox(height: 7),
-
-              Text(
-                'متابعة حالة الجهاز والتنبيهات',
-                style: TextStyle(
-                  color: secondaryText,
-                  fontSize: 13,
-                ),
-              ),
-
-              const SizedBox(height: 26),
-
-              // Device status
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(22),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: borderColor),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(13),
-                          decoration: BoxDecoration(
-                            color: militaryGreen.withValues(alpha: 0.16),
-                            borderRadius: BorderRadius.circular(15),
-                          ),
-                          child: const Icon(
-                            Icons.videocam_rounded,
-                            color: militaryGreen,
-                            size: 27,
-                          ),
-                        ),
-
-                        const SizedBox(width: 14),
-
-                        Expanded(
-                          child: Text(
-                            'حالة الجهاز',
-                            style: TextStyle(
-                              color: primaryText,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 7,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF3B3430)
-                                : const Color(0xFFF4E8DD),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-  Icons.circle,
-  color: statusColor,
-  size: 8,
-),
-                              const SizedBox(width: 7),
-                              Text(
-  statusText,
-  style: TextStyle(
-    color: statusColor,
-    fontSize: 12,
-    fontWeight: FontWeight.w600,
-  ),
-),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(15),
-                      decoration: BoxDecoration(
-                        color: innerCardColor,
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.info_outline_rounded,
-                            color: militaryGreen,
-                            size: 20,
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(
-                              statusMessage,
-                              style: TextStyle(
-                                color: secondaryText,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 30),
-
-              // Alerts heading
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'آخر التنبيهات',
-                    style: TextStyle(
-                      color: primaryText,
-                      fontSize: 19,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const Icon(
-                    Icons.notifications_none_rounded,
-                    color: militaryGreen,
-                    size: 25,
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 14),
-
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(
-                  vertical: 32,
-                  horizontal: 20,
-                ),
-                decoration: BoxDecoration(
-                  color: cardColor,
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: borderColor),
-                ),
-                child: Column(
-                  children: [
-                    const Icon(
-                      Icons.verified_user_outlined,
-                      color: militaryGreen,
-                      size: 38,
-                    ),
-
-                    const SizedBox(height: 14),
-
-                    Text(
-                      'لا توجد تنبيهات حالياً',
-                      style: TextStyle(
-                        color: primaryText,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-
-                    const SizedBox(height: 7),
-
-                    Text(
-                      'ستظهر التنبيهات هنا عند اكتشاف تهديد',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: secondaryText,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+        return Text(
+          name != null
+              ? tr(context, 'مرحبًا بك، $name', 'Welcome, $name')
+              : tr(context, 'مرحبًا بك', 'Welcome'),
+          style: TextStyle(
+            color: text,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
           ),
-        ),
-      ),
+        );
+      },
+    );
+  },
+),
+
+          const SizedBox(height: 12),
+          Text(tr(context, 'لوحة المتابعة', 'Dashboard'),
+              style: TextStyle(color: text, fontSize: 25, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 7),
+          Text(tr(context, 'متابعة حالة الجهاز والتنبيهات', 'Monitor device status and alerts'),
+              style: TextStyle(color: secondary, fontSize: 13)),
+          const SizedBox(height: 26),
+          Container(
+            padding: const EdgeInsets.all(22),
+            decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(22),
+                border: Border.all(color: border)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Container(padding: const EdgeInsets.all(13),
+                  decoration: BoxDecoration(color: RaqeebColors.subtle(dark),
+                      borderRadius: BorderRadius.circular(15)),
+                  child: Icon(Icons.videocam_rounded, color: accent, size: 27)),
+                const SizedBox(width: 14),
+                Expanded(child: Text(tr(context, 'حالة الجهاز', 'Device Status'),
+                    style: TextStyle(color: text, fontSize: 18, fontWeight: FontWeight.bold))),
+                Container(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(color: RaqeebColors.subtle(dark),
+                        borderRadius: BorderRadius.circular(20)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.circle, color: statusColor, size: 8),
+                      const SizedBox(width: 7),
+                      Text(statusLabel, style: TextStyle(color: statusColor,
+                          fontSize: 12, fontWeight: FontWeight.w600)),
+                    ])),
+              ]),
+              const SizedBox(height: 20),
+              Container(padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(color: RaqeebColors.subtle(dark),
+                    borderRadius: BorderRadius.circular(14)),
+                child: Row(children: [
+                  Icon(Icons.info_outline_rounded, color: accent, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(statusMessage,
+                      style: TextStyle(color: secondary, fontSize: 13))),
+                ])),
+            ]),
+          ),
+          const SizedBox(height: 30),
+          Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+            Text(tr(context, 'آخر التنبيهات', 'Recent Alerts'),
+                style: TextStyle(color: text, fontSize: 19, fontWeight: FontWeight.bold)),
+            Icon(Icons.notifications_none_rounded, color: accent, size: 25),
+          ]),
+          const SizedBox(height: 14),
+          AnimatedBuilder(
+            animation: IncidentStore.instance,
+            builder: (context, _) {
+              final latest = IncidentStore.instance.items.take(2).toList();
+              if (latest.isEmpty) {
+                return EmptyIncidents(
+                  icon: Icons.verified_user_outlined,
+                  title: tr(context, 'لا توجد تنبيهات حالياً', 'No alerts at the moment'),
+                  subtitle: tr(context, 'ستظهر التنبيهات هنا عند اكتشاف تهديد',
+                      'Alerts will appear here when a threat is detected'),
+                );
+              }
+              return Column(
+                children: latest.map((incident) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: IncidentCard(incident: incident),
+                )).toList(),
+              );
+            },
+          ),
+        ],
+      )),
     );
   }
 }
