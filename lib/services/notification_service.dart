@@ -84,6 +84,12 @@ final iosSettings = DarwinInitializationSettings(
     await initialize();
 
     const androidDetails = AndroidNotificationDetails(
+      visibility: NotificationVisibility.public,
+      category: AndroidNotificationCategory.alarm,
+      playSound: true,
+      enableVibration: true,
+      ongoing: true,
+      autoCancel: false,
       'raqeeb_alerts_v1',
       'Raqeeb Threat Alerts',
       channelDescription:
