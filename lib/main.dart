@@ -19,6 +19,83 @@ import 'screens/alerts_screen.dart';
 import 'screens/history_screen.dart';
 import 'incident_store.dart';
 
+// Navigation key for showing a foreground alert above any app screen.
+final GlobalKey<NavigatorState> raqeebNavigatorKey =
+    GlobalKey<NavigatorState>();
+
+final Set<String> _handledForegroundIncidentIds = <String>{};
+Future<void> _foregroundAlertQueue = Future<void>.value();
+
+void showRaqeebForegroundAlert({
+  required String incidentId,
+  required String title,
+  required String body,
+}) {
+  // Prevent duplicate popups for the same incident in this app session.
+  if (!_handledForegroundIncidentIds.add(incidentId)) return;
+  if (_handledForegroundIncidentIds.length > 100) {
+    _handledForegroundIncidentIds.remove(_handledForegroundIncidentIds.first);
+  }
+
+  _foregroundAlertQueue = _foregroundAlertQueue.then((_) async {
+    if (FirebaseAuth.instance.currentUser == null) return;
+
+    // A message may arrive while Flutter is still building its first frame.
+    for (var attempt = 0; attempt < 10; attempt++) {
+      if (raqeebNavigatorKey.currentState?.overlay != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    final navigator = raqeebNavigatorKey.currentState;
+    final context = navigator?.overlay?.context;
+    if (context == null || !context.mounted) {
+      debugPrint('FCM popup skipped: navigator not available');
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => PopScope(
+        canPop: false,
+        child: AlertDialog(
+          icon: const Icon(
+            Icons.warning_amber_rounded,
+            color: Color(0xFFB83F45),
+            size: 46,
+          ),
+          title: Text(title, textAlign: TextAlign.center),
+          content: Text(body, textAlign: TextAlign.center),
+          actionsAlignment: MainAxisAlignment.spaceBetween,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Dismiss'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                // Opens the team Alerts page; incident-specific navigation
+                // can be connected when its route supports incidentId.
+                raqeebNavigatorKey.currentState?.push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => const AlertsScreen(),
+                  ),
+                );
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFB83F45),
+              ),
+              child: const Text('View Alerts'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }).catchError((Object error, StackTrace stack) {
+    debugPrint('FCM popup error: $error');
+  });
+}
+
 @pragma('vm:entry-point')
 Future<void> raqeebBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -102,7 +179,9 @@ Future<void> main() async {
       return;
     }
 
-    await NotificationService.instance.showIncidentNotification(
+    // In the foreground, show an in-app dialog instead of a top banner.
+    // The existing background handler still shows system notifications.
+    showRaqeebForegroundAlert(
       incidentId: incidentId,
       title: message.notification?.title ??
           message.data['title']?.toString() ??
@@ -348,6 +427,7 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
     final dark = isDarkMode;
     final en = languageCode == 'en';
     return MaterialApp(
+      navigatorKey: raqeebNavigatorKey,
       title: 'Raqeeb',
       debugShowCheckedModeBanner: false,
       themeMode: dark ? ThemeMode.dark : ThemeMode.light,
