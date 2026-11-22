@@ -1,6 +1,6 @@
 # Weapon Detection (YOLO11n)
 
-This model detects visible weapons (pistols and knives) in the camera frames of the Raqeeb wearable device. When a weapon is confirmed, the device vibrates to alert the police officer and the incident is sent to the mobile application and the admin dashboard.
+This model detects visible weapons (pistols and knives) in the camera frames of the Raqeeb wearable device. When a weapon is detected in 3 consecutive frames, the device vibrates to alert the police officer and the incident is sent to the mobile application and the admin dashboard.
 
 ## Dataset
 
@@ -11,37 +11,39 @@ This model detects visible weapons (pistols and knives) in the camera frames of 
 
 ## Model
 
-- YOLO11n, the smallest model in the YOLO11 family, chosen because it runs in real time on the Raspberry Pi 5.
-- Fine-tuned from pretrained weights for 50 epochs (image size 640, batch 16) on an NVIDIA T4 GPU in Google Colab, in about 1 hour and 20 minutes.
-- Trained weights: `weights/best.pt` (5.5 MB).
+YOLO11n, the smallest model in the YOLO11 family, chosen because it runs in real time on the Raspberry Pi 5. It was trained in two stages on an NVIDIA T4 GPU in Google Colab:
+
+1. Base training: the pretrained YOLO11n trained on the dataset for 50 epochs.
+2. Fine-tuning for real-world conditions: a higher weight for classification errors and augmentation that imitates the body camera (rotation, scale, perspective and brightness).
+
+Trained weights of the final model: `weights/best.pt` (5.5 MB).
 
 ## Results on the test set (407 images)
 
 | Class | Precision | Recall | mAP50 | mAP50-95 |
 |---|---|---|---|---|
-| pistol | 0.853 | 0.971 | 0.983 | 0.856 |
-| knife | 0.978 | 0.861 | 0.967 | 0.663 |
-| all classes | 0.817 | 0.763 | 0.846 | 0.677 |
+| pistol | 0.886 | 0.971 | 0.976 | 0.777 |
+| knife | 0.984 | 0.871 | 0.957 | 0.634 |
+| all classes | 0.867 | 0.796 | 0.891 | 0.667 |
 
-## Alert threshold
+## Alert rule
 
-The device raises an alert when a pistol or knife is detected with a confidence of 0.40 or higher. At this threshold, weapon detection on the test set reached a precision of 0.99 and a recall of 0.95.
+The device raises an alert when a pistol or knife is detected with a confidence of 0.40 or higher in 3 consecutive frames. At this threshold, weapon detection on the test set reached a precision of 0.97 and a recall of 0.94.
 
 ## Files
 
 | File | Description |
 |---|---|
 | `Raqeeb_weapons_DS.ipynb` | Training, evaluation, threshold selection and live camera test |
-| `weights/best.pt` | Trained model weights |
+| `weights/best.pt` | Final model weights |
 
 ## How to run
 
 1. Open the notebook in Google Colab and select a GPU runtime (T4).
-2. Run Cell 1 to install the libraries, download the dataset and load the trained model.
-3. Run the evaluation cells (Cells 4 to 6) to reproduce the results, or Cell 10 to test the model live with the laptop camera.
+2. Run Cell 1 to install the libraries, download the dataset and load the final model.
+3. Run Cells 5 to 7 to reproduce the results, or Cell 8 to test the model live with the laptop camera.
 
 ## Next steps
 
-- Fine-tuning the model (v1.1) to reduce misclassification in real scenes, such as a weapon detected as a smartphone.
 - Adding real-world images captured at chest level to the training data.
--
+- Exporting the model to the NCNN format to run on the Raspberry Pi 5.
