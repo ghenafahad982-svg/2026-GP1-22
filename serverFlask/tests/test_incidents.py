@@ -20,12 +20,16 @@ class IncidentApiTests(unittest.TestCase):
         credentials = types.ModuleType("firebase_admin.credentials")
         firestore = types.ModuleType("firebase_admin.firestore")
         auth = types.ModuleType("firebase_admin.auth")
+        messaging = types.ModuleType("firebase_admin.messaging")
+        messaging.send = MagicMock(return_value="test-message-id")
+
         firestore.client = MagicMock()
         firestore.SERVER_TIMESTAMP = object()
+        firestore.transactional = lambda function: function
         firebase_admin.credentials = credentials
         firebase_admin.firestore = firestore
         firebase_admin.auth = auth
-
+        firebase_admin.messaging = messaging
         supabase = types.ModuleType("supabase")
         supabase.create_client = MagicMock(return_value=MagicMock())
 
@@ -35,6 +39,7 @@ class IncidentApiTests(unittest.TestCase):
             "firebase_admin.firestore": firestore,
             "firebase_admin.auth": auth,
             "supabase": supabase,
+            "firebase_admin.messaging": messaging,
         }
         fake_env = {
             "SUPABASE_URL": "https://example.invalid",
@@ -109,8 +114,7 @@ class IncidentApiTests(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(len(payload["incidents"]), 1)
         self.assertEqual(payload["incidents"][0]["eventId"], "event-test-1")
-        self.assertEqual(payload["incidents"][0]["status"], "pending")
-        self.assertTrue(payload["incidents"][0]["videoAvailable"])
+        self.assertEqual(payload["incidents"][0]["status"], "confirmed")
         self.db.collection.return_value.where.assert_called_once_with(
             "deviceId", "==", "raqeeb-001"
         )
@@ -197,6 +201,106 @@ class IncidentApiTests(unittest.TestCase):
             300,
         )
 
+
+    def post_action(self, action, token=True):
+        headers = (
+            {"Authorization": "Bearer example-test-token"}
+            if token else {}
+        )
+        return self.client.post(
+            "/incidents/event-test-1/action",
+            json={"action": action},
+            headers=headers,
+        )
+
+    def mock_action_incident(
+        self,
+        device_id="raqeeb-001",
+        status="confirmed",
+        read_at=None,
+    ):
+        incident_doc = MagicMock()
+        incident_doc.exists = True
+        incident_doc.to_dict.return_value = {
+            "deviceId": device_id,
+            "status": status,
+            "readAt": read_at,
+        }
+
+        document_get = (
+            self.db.collection.return_value
+            .document.return_value.get
+        )
+        document_get.side_effect = [
+            self.user_doc,
+            incident_doc,
+        ]
+
+        return self.db.transaction.return_value
+
+    def test_action_without_login_returns_401(self):
+        response = self.post_action("open", token=False)
+        self.assertEqual(response.status_code, 401)
+
+    def test_invalid_action_returns_400(self):
+        response = self.post_action("delete")
+        self.assertEqual(response.status_code, 400)
+
+    def test_open_incident_records_read_time(self):
+        transaction = self.mock_action_incident()
+
+        response = self.post_action("open")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["success"])
+
+        transaction.update.assert_called_once()
+        args, _ = transaction.update.call_args
+        self.assertIn("readAt", args[1])
+        self.assertNotIn("status", args[1])
+
+    def test_dismiss_incident_updates_status(self):
+        transaction = self.mock_action_incident()
+
+        response = self.post_action("dismiss")
+
+        self.assertEqual(response.status_code, 200)
+
+        transaction.update.assert_called_once()
+        args, _ = transaction.update.call_args
+
+        self.assertEqual(args[1]["status"], "dismissed")
+        self.assertIn("dismissedAt", args[1])
+
+    def test_dismissed_incident_cannot_be_opened(self):
+        transaction = self.mock_action_incident(
+            status="dismissed"
+        )
+
+        response = self.post_action("open")
+
+        self.assertEqual(response.status_code, 409)
+        transaction.update.assert_not_called()
+
+    def test_other_device_incident_cannot_be_modified(self):
+        transaction = self.mock_action_incident(
+            device_id="raqeeb-999"
+        )
+
+        response = self.post_action("dismiss")
+
+        self.assertEqual(response.status_code, 403)
+        transaction.update.assert_not_called()
+
+    def test_opening_read_incident_does_not_update_again(self):
+        transaction = self.mock_action_incident(
+            read_at="already-read"
+        )
+
+        response = self.post_action("open")
+
+        self.assertEqual(response.status_code, 200)
+        transaction.update.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,9 +1,9 @@
 import 'dart:async';
+import 'alerts_screen.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_auth/firebase_auth.dart';
-import '../incident_store.dart';
 import 'incident_widgets.dart';
 import '../raqeeb_ui.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -26,6 +26,59 @@ class _HomeScreenState extends State<HomeScreen> {
     checkDeviceStatus();
     _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) => checkDeviceStatus());
   }
+
+Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
+  final user = FirebaseAuth.instance.currentUser;
+
+  if (user == null) {
+    throw Exception('not_signed_in');
+  }
+
+  final token = await user.getIdToken();
+
+  if (token == null || token.isEmpty) {
+    throw Exception('missing_token');
+  }
+
+  final response = await http.get(
+    Uri.parse('https://raqeebserver.onrender.com/incidents'),
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Accept': 'application/json',
+    },
+  ).timeout(const Duration(seconds: 30));
+
+  if (response.statusCode != 200) {
+    throw Exception('server_error_${response.statusCode}');
+  }
+
+  final decoded = jsonDecode(response.body);
+
+  if (decoded is! Map<String, dynamic> ||
+      decoded['success'] != true ||
+      decoded['incidents'] is! List) {
+    throw const FormatException('Invalid incidents response');
+  }
+
+  final incidents = (decoded['incidents'] as List)
+      .whereType<Map<String, dynamic>>()
+      .where((incident) {
+        final status =
+            incident['status']?.toString() ?? 'confirmed';
+
+        return status == 'confirmed' &&
+            incident['readAt'] == null;
+      })
+      .toList();
+
+  incidents.sort((a, b) {
+    final first = a['createdAt']?.toString() ?? '';
+    final second = b['createdAt']?.toString() ?? '';
+    return second.compareTo(first);
+  });
+
+  return incidents.take(2).toList();
+}
 
   Future<void> checkDeviceStatus() async {
     try {
@@ -101,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
               child: Icon(Icons.shield_outlined, color: accent, size: 25)),
           ]),
           const SizedBox(height: 36),
-          
+
 StreamBuilder<User?>(
   stream: FirebaseAuth.instance.userChanges(),
   builder: (context, authSnapshot) {
@@ -118,7 +171,7 @@ StreamBuilder<User?>(
           .snapshots(),
       builder: (context, userSnapshot) {
         final data = userSnapshot.data?.data();
-        
+
 
         final firestoreName =
             (data?['name'] as String?)?.trim();
@@ -196,26 +249,72 @@ StreamBuilder<User?>(
             Icon(Icons.notifications_none_rounded, color: accent, size: 25),
           ]),
           const SizedBox(height: 14),
-          AnimatedBuilder(
-            animation: IncidentStore.instance,
-            builder: (context, _) {
-              final latest = IncidentStore.instance.items.take(2).toList();
-              if (latest.isEmpty) {
-                return EmptyIncidents(
-                  icon: Icons.verified_user_outlined,
-                  title: tr(context, 'لا توجد تنبيهات حالياً', 'No alerts at the moment'),
-                  subtitle: tr(context, 'ستظهر التنبيهات هنا عند اكتشاف تهديد',
-                      'Alerts will appear here when a threat is detected'),
+
+FutureBuilder<List<Map<String, dynamic>>>(
+  future: _fetchRecentAlerts(),
+  builder: (context, snapshot) {
+    if (snapshot.connectionState == ConnectionState.waiting) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (snapshot.hasError) {
+      return Text(
+        tr(context, 'تعذر تحميل التنبيهات', 'Could not load alerts'),
+        style: TextStyle(color: RaqeebColors.secondary(dark)),
+      );
+    }
+
+    final latest = snapshot.data ?? [];
+
+    if (latest.isEmpty) {
+      return EmptyIncidents(
+        icon: Icons.verified_user_outlined,
+        title: tr(context, 'لا توجد تنبيهات حاليًا', 'No alerts at the moment'),
+        subtitle: tr(
+          context,
+          'ستظهر التنبيهات هنا عند اكتشاف تهديد',
+          'Alerts will appear here when a threat is detected',
+        ),
+      );
+    }
+
+    return Column(
+      children: latest.map((incident) {
+        final type = incident['detectionType']?.toString() ?? 'weapon';
+        final createdAt = incident['createdAt']?.toString() ?? '';
+        final eventId = incident['eventId']?.toString() ?? '';
+
+        return Card(
+          child: ListTile(
+            leading: Icon(
+              Icons.warning_amber_rounded,
+              color: RaqeebColors.danger(dark),
+            ),
+            title: Text(
+              type == 'knife'
+                  ? tr(context, 'اكتشاف سكين', 'Knife detected')
+                  : type == 'pistol' || type == 'gun'
+                      ? tr(context, 'اكتشاف سلاح ناري', 'Firearm detected')
+                      : tr(context, 'اكتشاف سلاح', 'Weapon detected'),
+            ),
+            subtitle: Text(createdAt),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              if (eventId.isNotEmpty) {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const AlertsScreen(),
+                  ),
                 );
               }
-              return Column(
-                children: latest.map((incident) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: IncidentCard(incident: incident),
-                )).toList(),
-              );
             },
           ),
+        );
+      }).toList(),
+    );
+  },
+),
+
         ],
       )),
     );
