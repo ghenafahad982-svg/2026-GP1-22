@@ -16,6 +16,28 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   String deviceStatus = 'checking';
   Timer? _statusTimer;
+  late Future<List<Map<String, dynamic>>> _recentAlertsFuture;
+
+  void _refreshRecentAlerts() {
+    if (!mounted) return;
+    setState(() {
+      _recentAlertsFuture = _fetchRecentAlerts();
+    });
+  }
+
+  String _formatIncidentTime(dynamic raw, BuildContext context) {
+    if (raw is! String || raw.isEmpty) return '—';
+    final parsed = DateTime.tryParse(raw);
+    if (parsed == null) return raw;
+    final date = parsed.toLocal();
+    String two(int number) => number.toString().padLeft(2, '0');
+    final hour = date.hour % 12 == 0 ? 12 : date.hour % 12;
+    final period = date.hour < 12
+        ? tr(context, 'ص', 'AM')
+        : tr(context, 'م', 'PM');
+    return '${two(date.day)}-${two(date.month)}-${date.year} • '
+        '$hour:${two(date.minute)} $period';
+  }
   // Keep the original Firebase emulator endpoint for local testing.
   static const String statusUrl =
       'http://192.168.100.135:5001/raqeeb-gp1/us-central1/getDeviceStatus';
@@ -23,6 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _recentAlertsFuture = _fetchRecentAlerts();
     checkDeviceStatus();
     _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) => checkDeviceStatus());
   }
@@ -149,9 +172,7 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
               Text(tr(context, 'نظام المراقبة الذكي', 'Intelligent Monitoring System'),
                   style: TextStyle(color: secondary, fontSize: 12)),
             ])),
-            Container(padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(14)),
-              child: Icon(Icons.shield_outlined, color: accent, size: 25)),
+            
           ]),
           const SizedBox(height: 36),
 
@@ -246,12 +267,16 @@ StreamBuilder<User?>(
           Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
             Text(tr(context, 'آخر التنبيهات', 'Recent Alerts'),
                 style: TextStyle(color: text, fontSize: 19, fontWeight: FontWeight.bold)),
-            Icon(Icons.notifications_none_rounded, color: accent, size: 25),
+            IconButton(
+              tooltip: tr(context, 'تحديث التنبيهات', 'Refresh alerts'),
+              onPressed: _refreshRecentAlerts,
+              icon: Icon(Icons.refresh_rounded, color: accent, size: 25),
+            ),
           ]),
           const SizedBox(height: 14),
 
 FutureBuilder<List<Map<String, dynamic>>>(
-  future: _fetchRecentAlerts(),
+  future: _recentAlertsFuture,
   builder: (context, snapshot) {
     if (snapshot.connectionState == ConnectionState.waiting) {
       return const Center(child: CircularProgressIndicator());
@@ -297,7 +322,7 @@ FutureBuilder<List<Map<String, dynamic>>>(
                       ? tr(context, 'اكتشاف سلاح ناري', 'Firearm detected')
                       : tr(context, 'اكتشاف سلاح', 'Weapon detected'),
             ),
-            subtitle: Text(createdAt),
+            subtitle: Text(_formatIncidentTime(createdAt, context)),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
               if (eventId.isNotEmpty) {
@@ -305,7 +330,7 @@ FutureBuilder<List<Map<String, dynamic>>>(
                   MaterialPageRoute(
                     builder: (_) => const AlertsScreen(),
                   ),
-                );
+                ).then((_) => _refreshRecentAlerts());
               }
             },
           ),
