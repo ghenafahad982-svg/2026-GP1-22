@@ -1,5 +1,4 @@
 
-import 'dart:async';
 import 'dart:convert';
 import 'incident_video_player_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -398,76 +397,169 @@ Future<void> _dismissIncident(String eventId) async {
   }
 }
 
-Future<void> _openIncidentDetails(
-  Map<String, dynamic> incident,
-) async {
-  final eventId = incident['eventId']?.toString() ?? '';
-  if (eventId.isEmpty) return;
+  String _confidenceText(dynamic confidence) {
+    if (confidence is! num) return '—';
+    return '${(confidence * 100).clamp(0, 100).toStringAsFixed(0)}%';
+  }
 
-  try {
-    await _updateIncidentAction(eventId, 'open');
+  Future<void> _openIncidentDetails(Map<String, dynamic> incident) async {
+    final eventId = incident['eventId']?.toString() ?? '';
+    if (eventId.isEmpty) return;
 
-    if (!mounted) return;
+    try {
+      // Opening details marks this alert as read and moves it to History.
+      await _updateIncidentAction(eventId, 'open');
+      if (!mounted) return;
+      _refreshIncidents();
 
-    _refreshIncidents();
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          final theme = Theme.of(dialogContext);
+          final dark = theme.brightness == Brightness.dark;
+          final type = incident['detectionType']?.toString() ?? '';
+          final deviceId = incident['deviceId']?.toString() ?? '—';
+          final videoAvailable = incident['videoAvailable'] == true;
+          final green = dark ? const Color(0xFF9AB89B) : const Color(0xFF426B4C);
 
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        final dark =
-            Theme.of(dialogContext).brightness == Brightness.dark;
-
-        final type = incident['detectionType']?.toString() ?? '';
-        final deviceId = incident['deviceId']?.toString() ?? '—';
-
-        return AlertDialog(
-          title: Text(_threatName(dialogContext, type)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '${tr(dialogContext, 'الجهاز', 'Device')}: $deviceId',
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '${tr(dialogContext, 'التوقيت', 'Time')}: '
-                '${_incidentTime(incident['createdAt'])}',
-              ),
-              const SizedBox(height: 8),
-              Text(
-                tr(dialogContext, 'تم التأكيد', 'Confirmed'),
-                style: TextStyle(
-                  color: RaqeebColors.accent(dark),
+          return AlertDialog(
+            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+            contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
+            title: Row(
+              children: [
+                const Icon(Icons.warning_amber_rounded, color: Color(0xFFD89425)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _threatName(dialogContext, type),
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  ),
                 ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: Text(tr(dialogContext, 'إغلاق', 'Close')),
+              ],
             ),
-          ],
-        );
-      },
-    );
-  } catch (_) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          tr(
+            content: SizedBox(
+              width: 390,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  _detailRow(
+                    dialogContext,
+                    Icons.devices_outlined,
+                    tr(dialogContext, 'الجهاز', 'Device'),
+                    deviceId,
+                  ),
+                  const SizedBox(height: 14),
+                  _detailRow(
+                    dialogContext,
+                    Icons.schedule_outlined,
+                    tr(dialogContext, 'التوقيت', 'Time'),
+                    _incidentTime(incident['createdAt']),
+                  ),
+                  const SizedBox(height: 14),
+                  _detailRow(
+                    dialogContext,
+                    Icons.analytics_outlined,
+                    tr(dialogContext, 'نسبة الثقة', 'Confidence'),
+                    _confidenceText(incident['confidence']),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                    decoration: BoxDecoration(
+                      color: green.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.check_circle_outline_rounded, color: green, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          tr(dialogContext, 'تم التأكيد', 'Confirmed'),
+                          style: TextStyle(color: green, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!videoAvailable) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      tr(dialogContext, 'لا يوجد تسجيل متاح', 'No recording available'),
+                      style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 13),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actionsPadding: const EdgeInsets.fromLTRB(18, 4, 18, 16),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text(tr(dialogContext, 'إغلاق', 'Close')),
+              ),
+              if (videoAvailable)
+                FilledButton.icon(
+                  onPressed: () async {
+                    Navigator.of(dialogContext).pop();
+                    await _openIncidentVideo(context, eventId);
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: dark
+                        ? const Color(0xFF507E59)
+                        : const Color(0xFF426B4C),
+                    foregroundColor: Colors.white,
+                  ),
+                  icon: const Icon(Icons.play_circle_outline_rounded),
+                  label: Text(tr(dialogContext, 'مشاهدة التسجيل', 'View Recording')),
+                ),
+            ],
+          );
+        },
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(tr(
             context,
             'تعذر فتح تفاصيل الحادث',
             'Could not open incident details',
+          )),
+        ),
+      );
+    }
+  }
+
+  Widget _detailRow(
+    BuildContext context,
+    IconData icon,
+    String label,
+    String value,
+  ) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 19, color: RaqeebColors.secondary(dark)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 12)),
+              const SizedBox(height: 3),
+              Text(value, style: TextStyle(color: RaqeebColors.text(dark), fontWeight: FontWeight.w600)),
+            ],
           ),
         ),
-      ),
+      ],
     );
   }
-}
 
   Widget _serverIncidentCard(
     BuildContext context,
@@ -475,128 +567,190 @@ Future<void> _openIncidentDetails(
     bool dark,
   ) {
     final type = incident['detectionType']?.toString() ?? '';
-    final status = incident['status']?.toString() ?? 'pending';
     final deviceId = incident['deviceId']?.toString() ?? '—';
-    final confidence = incident['confidence'];
+    final eventId = incident['eventId']?.toString() ?? '';
+    final videoAvailable = incident['videoAvailable'] == true;
+    final theme = Theme.of(context);
+    final green = dark ? const Color(0xFF507E59) : const Color(0xFF426B4C);
+    final red = dark ? const Color(0xFFEF9A9A) : const Color(0xFFB83B3B);
+    final cardColor = theme.colorScheme.surface;
 
-    String confidenceText = '—';
-    if (confidence is num) {
-      confidenceText =
-          '${(confidence * 100).clamp(0, 100).toStringAsFixed(0)}%';
-    }
+    final dismissButton = SizedBox(
+      height: 46,
+      width: double.infinity,
+      child: OutlinedButton.icon(
+        onPressed: eventId.isEmpty ? null : () => _dismissIncident(eventId),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: red,
+          side: BorderSide(color: red.withValues(alpha: 0.75), width: 1.2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+        ),
+        icon: const Icon(Icons.close_rounded, size: 19),
+        label: Text(tr(context, 'استبعاد', 'Dismiss'), maxLines: 1),
+      ),
+    );
+
+    final videoButton = SizedBox(
+      height: 46,
+      width: double.infinity,
+      child: FilledButton.icon(
+        onPressed: !videoAvailable || eventId.isEmpty
+            ? null
+            : () => _openIncidentVideo(context, eventId),
+        style: FilledButton.styleFrom(
+          backgroundColor: green,
+          foregroundColor: Colors.white,
+          disabledBackgroundColor: RaqeebColors.secondary(dark).withValues(alpha: 0.13),
+          disabledForegroundColor: RaqeebColors.secondary(dark),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+        ),
+        icon: Icon(
+          videoAvailable ? Icons.play_circle_outline_rounded : Icons.videocam_off_outlined,
+          size: 19,
+        ),
+        label: Text(
+          videoAvailable
+              ? tr(context, 'مشاهدة التسجيل', 'View Recording')
+              : tr(context, 'لا يوجد تسجيل', 'No Recording'),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
 
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      color: RaqeebColors.background(dark),
+      margin: const EdgeInsets.only(bottom: 14),
+      elevation: 0,
+      color: cardColor,
+      clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: BorderSide(
-          color: RaqeebColors.secondary(dark).withValues(alpha: 0.35),
-        ),
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: RaqeebColors.secondary(dark).withValues(alpha: 0.24)),
       ),
-        child: InkWell(
-    borderRadius: BorderRadius.circular(16),
-    onTap: () => _openIncidentDetails(incident),
-    child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.warning_amber_rounded,
-                  color: Colors.orange,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _threatName(context, type),
-                    style: TextStyle(
-                      color: RaqeebColors.text(dark),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 17,
+      child: InkWell(
+        onTap: eventId.isEmpty ? null : () => _openIncidentDetails(incident),
+        mouseCursor: SystemMouseCursors.click,
+        hoverColor: green.withValues(alpha: dark ? 0.12 : 0.05),
+        splashColor: green.withValues(alpha: 0.12),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    height: 42,
+                    width: 42,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD89425).withValues(alpha: dark ? 0.18 : 0.11),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Color(0xFFD89425),
                     ),
                   ),
-                ),
-                Text(
-                  status == 'pending'
-                      ? tr(context, 'قيد المراجعة', 'Pending')
-                      : status == 'confirmed'
-                          ? tr(context, 'تم التأكيد', 'Confirmed')
-                          : status == 'dismissed'
-                              ? tr(context, 'مستبعد', 'Dismissed')
-                              : status,
-                  style: TextStyle(
-                    color: RaqeebColors.secondary(dark),
-                    fontSize: 12,
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _threatName(context, type),
+                          style: TextStyle(
+                            color: RaqeebColors.text(dark),
+                            fontWeight: FontWeight.w700,
+                            fontSize: 17,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          _incidentTime(incident['createdAt']),
+                          style: TextStyle(
+                            color: RaqeebColors.secondary(dark),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '${tr(context, 'الجهاز', 'Device')}: $deviceId',
-              style: TextStyle(color: RaqeebColors.text(dark)),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              '${tr(context, 'التوقيت', 'Time')}: '
-              '${_incidentTime(incident['createdAt'])}',
-              style: TextStyle(color: RaqeebColors.text(dark)),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              '${tr(context, 'نسبة الثقة', 'Confidence')}: '
-              '$confidenceText',
-              style: TextStyle(color: RaqeebColors.text(dark)),
-            ),
-            const SizedBox(height: 8),
-            
-
-OutlinedButton.icon(
-  onPressed: () {
-    final eventId = incident['eventId']?.toString() ?? '';
-
-    if (eventId.isNotEmpty) {
-      _dismissIncident(eventId);
-    }
-  },
-  icon: const Icon(Icons.close_rounded),
-  label: Text(tr(context, 'استبعاد', 'Dismiss')),
-),
-const SizedBox(height: 8),
-
-if (incident['videoAvailable'] == true)
-  OutlinedButton.icon(
-    onPressed: () {
-      final eventId = incident['eventId']?.toString() ?? '';
-
-      if (eventId.isNotEmpty) {
-        _openIncidentVideo(context, eventId);
-      }
-    },
-    icon: const Icon(Icons.play_circle_outline),
-    label: Text(
-      tr(context, 'مشاهدة التسجيل', 'View Recording'),
-    ),
-  )
-else
-  Text(
-    tr(context, 'لا يوجد تسجيل متاح', 'No recording available'),
-    style: TextStyle(
-      color: RaqeebColors.secondary(dark),
-      fontSize: 12,
-    ),
-  ),
-
-
-                   ],
+                  const SizedBox(width: 8),
+                  Icon(
+                    Directionality.of(context) == TextDirection.rtl
+                        ? Icons.chevron_left_rounded
+                        : Icons.chevron_right_rounded,
+                    size: 27,
+                    color: green,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 13),
+              Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: green.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      tr(context, 'تم التأكيد', 'Confirmed'),
+                      style: TextStyle(color: dark ? const Color(0xFF9AB89B) : green, fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    '${tr(context, 'الجهاز', 'Device')}: $deviceId',
+                    style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 12),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.touch_app_outlined, size: 17, color: green),
+                  const SizedBox(width: 6),
+                  Text(
+                    tr(context, 'اضغط لعرض التفاصيل', 'Tap to view details'),
+                    style: TextStyle(color: green, fontWeight: FontWeight.w600, fontSize: 12),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Divider(height: 1, color: RaqeebColors.secondary(dark).withValues(alpha: 0.18)),
+              const SizedBox(height: 14),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  if (constraints.maxWidth < 390) {
+                    return Column(
+                      children: [
+                        videoButton,
+                        const SizedBox(height: 9),
+                        dismissButton,
+                      ],
+                    );
+                  }
+                  return Row(
+                    children: [
+                      Expanded(child: dismissButton),
+                      const SizedBox(width: 10),
+                      Expanded(child: videoButton),
+                    ],
+                  );
+                },
+              ),
+            ],
+          ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -609,10 +763,10 @@ else
         title: Text(tr(context, 'التنبيهات', 'Alerts')),
         actions: [
           TextButton.icon(
-  onPressed: _readingAll ? null : _readAllIncidents,
-  icon: const Icon(Icons.done_all_rounded),
-  label: Text(tr(context, 'قراءة الكل', 'Read All')),
-),
+            onPressed: _readingAll ? null : _readAllIncidents,
+            icon: const Icon(Icons.done_all_rounded),
+            label: Text(tr(context, 'قراءة الكل', 'Read All')),
+          ),
           IconButton(
             tooltip: tr(context, 'تحديث', 'Refresh'),
             onPressed: _refreshIncidents,
