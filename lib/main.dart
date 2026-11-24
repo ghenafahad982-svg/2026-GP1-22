@@ -6,7 +6,8 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
-
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'firebase_options.dart';
 import 'services/notification_service.dart';
 import 'raqeeb_ui.dart';
@@ -17,7 +18,6 @@ import 'screens/settings_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/alerts_screen.dart';
 import 'screens/history_screen.dart';
-import 'incident_store.dart';
 
 // Navigation key for showing a foreground alert above any app screen.
 final GlobalKey<NavigatorState> raqeebNavigatorKey =
@@ -25,6 +25,48 @@ final GlobalKey<NavigatorState> raqeebNavigatorKey =
 
 final Set<String> _handledForegroundIncidentIds = <String>{};
 Future<void> _foregroundAlertQueue = Future<void>.value();
+
+Future<void> dismissRaqeebIncident(String incidentId) async {
+  final user = FirebaseAuth.instance.currentUser;
+
+  if (user == null) {
+    throw Exception('not_signed_in');
+  }
+
+  final token = await user.getIdToken();
+
+  if (token == null || token.isEmpty) {
+    throw Exception('missing_token');
+  }
+
+  final uri = Uri.parse(
+    'https://raqeebserver.onrender.com/incidents/'
+    '${Uri.encodeComponent(incidentId)}/action',
+  );
+
+  final response = await http.post(
+    uri,
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: jsonEncode({'action': 'dismiss'}),
+  ).timeout(const Duration(seconds: 30));
+
+  if (response.statusCode != 200) {
+    throw Exception(
+      'dismiss_failed_${response.statusCode}',
+    );
+  }
+
+  final result = jsonDecode(response.body);
+
+  if (result is! Map<String, dynamic> ||
+      result['success'] != true) {
+    throw Exception('invalid_dismiss_response');
+  }
+}
 
 void showRaqeebForegroundAlert({
   required String incidentId,
@@ -51,7 +93,7 @@ void showRaqeebForegroundAlert({
       debugPrint('FCM popup skipped: navigator not available');
       return;
     }
-
+bool dismissInProgress = false;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -67,12 +109,40 @@ void showRaqeebForegroundAlert({
           content: Text(body, textAlign: TextAlign.center),
           actionsAlignment: MainAxisAlignment.spaceBetween,
           actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Dismiss'),
-            ),
+
+TextButton(
+  onPressed: () async {
+    if (dismissInProgress) return;
+
+    dismissInProgress = true;
+
+    try {
+      await dismissRaqeebIncident(incidentId);
+
+      if (!dialogContext.mounted) return;
+
+      Navigator.of(dialogContext).pop();
+    } catch (error) {
+      if (!dialogContext.mounted) return;
+
+      ScaffoldMessenger.of(dialogContext).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Could not dismiss the alert. Please try again.',
+          ),
+        ),
+      );
+    } finally {
+      dismissInProgress = false;
+    }
+  },
+  child: const Text('Dismiss'),
+),
+
             FilledButton(
               onPressed: () {
+                if (dismissInProgress) return;
+
                 Navigator.of(dialogContext).pop();
                 // Opens the team Alerts page; incident-specific navigation
                 // can be connected when its route supports incidentId.
@@ -192,8 +262,6 @@ Future<void> main() async {
     );
   });
 
-  // Load the team's incident store before rendering the app.
-  await IncidentStore.instance.load();
 
   runApp(const RaqeebApp());
 
@@ -528,15 +596,20 @@ class MainNavigation extends StatefulWidget {
 
 class _MainNavigationState extends State<MainNavigation> {
   int selectedIndex = 0;
-
+  int _historyRefreshKey = 0;
+  int _alertsRefreshKey = 0;
   @override
   Widget build(BuildContext context) {
     final dark = widget.isDarkMode;
     final bg = RaqeebColors.bottomBar(dark);
     final pages = <Widget>[
       const HomeScreen(),
-      const HistoryScreen(),
-      const AlertsScreen(),
+      HistoryScreen(
+  key: ValueKey(_historyRefreshKey),
+),
+      AlertsScreen(
+  key: ValueKey(_alertsRefreshKey),
+),
       const ProfileScreen(),
       SettingsScreen(
         isDarkMode: dark,
@@ -566,8 +639,12 @@ class _MainNavigationState extends State<MainNavigation> {
             Transform.translate(
               offset: const Offset(0, -14),
               child: GestureDetector(
-                onTap: () => setState(() => selectedIndex = 2),
-                child: Column(mainAxisSize: MainAxisSize.min, children: [
+onTap: () {
+  setState(() {
+    _alertsRefreshKey++;
+    selectedIndex = 2;
+  });
+},                child: Column(mainAxisSize: MainAxisSize.min, children: [
                   Container(
                     width: 56, height: 56,
                     decoration: BoxDecoration(
@@ -596,7 +673,17 @@ class _MainNavigationState extends State<MainNavigation> {
     final dark = widget.isDarkMode;
     final selected = selectedIndex == index;
     return InkWell(
-      onTap: () => setState(() => selectedIndex = index),
+      onTap: () {
+  setState(() {
+    if (index == 1) {
+      _historyRefreshKey++;
+    } else if (index == 2) {
+      _alertsRefreshKey++;
+    }
+
+    selectedIndex = index;
+  });
+},
       borderRadius: BorderRadius.circular(12),
       child: SizedBox(
         width: 64,

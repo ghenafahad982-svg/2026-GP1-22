@@ -11,23 +11,27 @@ from firebase_admin import credentials, firestore, auth, messaging
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from supabase import create_client
+from google.api_core import exceptions as google_exceptions
 from google.api_core.exceptions import Conflict
 
 app = Flask(__name__)
 # Allow Flutter Web development requests to read incidents.
 # Authentication is still required by the endpoint.
+
 CORS(
     app,
     resources={
-r"/incidents(?:/[^/]+/video-url)?": {            "origins": [
+        r"/incidents(?:/[^/]+/(?:video-url|action))?": {
+            "origins": [
                 r"^http://localhost(:[0-9]+)?$",
                 r"^http://127\.0\.0\.1(:[0-9]+)?$",
             ],
-            "methods": ["GET", "OPTIONS"],
+            "methods": ["GET", "POST", "OPTIONS"],
             "allow_headers": ["Authorization", "Content-Type"],
         }
     },
 )
+
 # Environment variables
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY")
@@ -304,12 +308,15 @@ def start_incident():
 
     try:
         incident_ref.create({
-            "eventId": event_id,
-            "deviceId": device_id,
-            "detectionType": detection_type,
-            "confidence": confidence,
-            "createdAt": firestore.SERVER_TIMESTAMP,
-        })
+    "eventId": event_id,
+    "deviceId": device_id,
+    "detectionType": detection_type,
+    "confidence": confidence,
+    "createdAt": firestore.SERVER_TIMESTAMP,
+    "status": "confirmed",
+    "readAt": None,
+    "dismissedAt": None,
+})
     except Conflict:
         return jsonify({
             "success": True,
@@ -395,20 +402,20 @@ def complete_video_upload():
             "message": "Invalid video path"
         }), 400
 
-    event_data = {
-        "eventId": event_id,
-        "deviceId": "raqeeb-001",
-        "videoPath": video_path,
-        "bucket": SUPABASE_BUCKET,
-        "createdAt": firestore.SERVER_TIMESTAMP,
-        "detectionType": data.get("detectionType", "unknown"),
-        "confidence": data.get("confidence")
-    }
+    
+    incident_ref = db.collection("incidents").document(event_id)
 
-    db.collection("incidents").document(event_id).set(
-        event_data,
-        merge=True
-    )
+    try:
+        incident_ref.update({
+            "videoPath": video_path,
+            "bucket": SUPABASE_BUCKET,
+        })
+    except google_exceptions.NotFound:
+        return jsonify({
+            "success": False,
+            "message": "Incident not found. Start incident first."
+        }), 404
+
 
     return jsonify({
         "success": True,
@@ -501,8 +508,16 @@ def get_incidents():
                 created_at.isoformat()
                 if created_at else None
             ),
-            "status": data.get("status", "pending"),
-            "videoAvailable": bool(data.get("videoPath"))
+            "status": (
+    "dismissed"
+    if data.get("status") == "dismissed"
+    else "confirmed"
+),
+"readAt": (
+    data["readAt"].isoformat()
+    if data.get("readAt") else None
+),
+"videoAvailable": bool(data.get("videoPath"))
         })
 
     incidents.sort(
@@ -514,6 +529,104 @@ def get_incidents():
         "success": True,
         "incidents": incidents
     })
+
+# Allow an officer to open or dismiss an assigned incident
+@app.route("/incidents/<event_id>/action", methods=["POST"])
+@require_officer_auth
+def update_incident_action(event_id):
+    officer_uid = request.officer_uid
+    data = request.get_json(silent=True) or {}
+    action = data.get("action")
+
+    if action not in ("open", "dismiss"):
+        return jsonify({
+            "success": False,
+            "message": "Invalid action"
+        }), 400
+
+    officer_doc = db.collection("Users").document(officer_uid).get()
+
+    if not officer_doc.exists:
+        return jsonify({
+            "success": False,
+            "message": "Officer profile not found"
+        }), 403
+
+    officer = officer_doc.to_dict() or {}
+
+    if officer.get("role") != "officer":
+        return jsonify({
+            "success": False,
+            "message": "Officer access required"
+        }), 403
+
+    device_id = officer.get("deviceId")
+
+    if not device_id:
+        return jsonify({
+            "success": False,
+            "message": "No assigned device"
+        }), 403
+
+
+    incident_ref = db.collection("incidents").document(event_id)
+
+    @firestore.transactional
+    def apply_action(transaction):
+        incident_doc = incident_ref.get(transaction=transaction)
+
+        if not incident_doc.exists:
+            return "not_found"
+
+        incident = incident_doc.to_dict() or {}
+
+        if incident.get("deviceId") != device_id:
+            return "forbidden"
+
+        if incident.get("status") == "dismissed":
+            return "already_dismissed"
+
+        if action == "open":
+            if incident.get("readAt") is None:
+                transaction.update(incident_ref, {
+                    "readAt": firestore.SERVER_TIMESTAMP
+                })
+
+        elif action == "dismiss":
+            transaction.update(incident_ref, {
+                "status": "dismissed",
+                "dismissedAt": firestore.SERVER_TIMESTAMP
+            })
+
+        return "success"
+
+    transaction = db.transaction()
+    result = apply_action(transaction)
+
+    if result == "not_found":
+        return jsonify({
+            "success": False,
+            "message": "Incident not found"
+        }), 404
+
+    if result == "forbidden":
+        return jsonify({
+            "success": False,
+            "message": "Access denied"
+        }), 403
+
+    if result == "already_dismissed":
+        return jsonify({
+            "success": False,
+            "message": "Incident already dismissed"
+        }), 409
+
+    return jsonify({
+        "success": True,
+        "eventId": event_id,
+        "action": action
+    }), 200
+
 
 # Secure incident video playback for officers
 @app.route("/incidents/<event_id>/video-url", methods=["GET"])

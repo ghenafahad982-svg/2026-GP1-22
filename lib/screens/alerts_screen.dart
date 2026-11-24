@@ -6,7 +6,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-import '../incident_store.dart';
 import '../raqeeb_ui.dart';
 import 'incident_widgets.dart';
 
@@ -113,6 +112,51 @@ class _AlertsScreenState extends State<AlertsScreen> {
       );
     }
   }
+
+Future<void> _updateIncidentAction(
+  String eventId,
+  String action,
+) async {
+  final user = FirebaseAuth.instance.currentUser;
+
+  if (user == null) {
+    throw Exception('not_signed_in');
+  }
+
+  final token = await user.getIdToken();
+
+  if (token == null || token.isEmpty) {
+    throw Exception('missing_token');
+  }
+
+  final uri = Uri.parse(
+    'https://raqeebserver.onrender.com/incidents/'
+    '${Uri.encodeComponent(eventId)}/action',
+  );
+
+  final response = await http.post(
+    uri,
+    headers: {
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: jsonEncode({'action': action}),
+  ).timeout(const Duration(seconds: 30));
+
+  if (response.statusCode != 200) {
+    throw Exception(
+      'incident_action_failed_${response.statusCode}',
+    );
+  }
+
+  final data = jsonDecode(response.body);
+
+  if (data is! Map<String, dynamic> ||
+      data['success'] != true) {
+    throw Exception('invalid_action_response');
+  }
+}
 
   Future<String> _fetchVideoUrl(String eventId) async {
     final user = FirebaseAuth.instance.currentUser;
@@ -228,6 +272,203 @@ class _AlertsScreenState extends State<AlertsScreen> {
         '${two(local.hour)}:${two(local.minute)}';
   }
 
+bool _readingAll = false;
+
+Future<void> _readAllIncidents() async {
+  if (_readingAll) return;
+
+  try {
+    // Fetch a fresh snapshot of the current unread incidents.
+    final incidents = await _fetchIncidents();
+
+    final unread = incidents.where((incident) {
+      final status = incident['status']?.toString() ?? 'confirmed';
+      return status == 'confirmed' && incident['readAt'] == null;
+    }).toList();
+
+    if (!mounted || unread.isEmpty) return;
+
+    final shouldProceed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr(context, 'قراءة الكل', 'Read All')),
+        content: Text(
+          tr(
+            context,
+            'هل تريد نقل جميع التنبيهات الحالية إلى السجل؟',
+            'Move all current alerts to history?',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(tr(context, 'إلغاء', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(tr(context, 'نقل الكل', 'Move All')),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldProceed != true || !mounted) return;
+
+    setState(() => _readingAll = true);
+
+    var failed = 0;
+
+    for (final incident in unread) {
+      final eventId = incident['eventId']?.toString() ?? '';
+      if (eventId.isEmpty) {
+        failed++;
+        continue;
+      }
+
+      try {
+        await _updateIncidentAction(eventId, 'open');
+      } catch (_) {
+        failed++;
+      }
+    }
+
+    if (!mounted) return;
+
+    _refreshIncidents();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          failed == 0
+              ? tr(context, 'تم نقل التنبيهات إلى السجل', 'Alerts moved to history')
+              : tr(
+                  context,
+                  'تعذر نقل بعض التنبيهات، يرجى المحاولة مجددًا',
+                  'Some alerts could not be moved. Please try again.',
+                ),
+        ),
+      ),
+    );
+  } catch (_) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          tr(context, 'تعذر قراءة التنبيهات', 'Could not load alerts'),
+        ),
+      ),
+    );
+  } finally {
+    if (mounted) {
+      setState(() => _readingAll = false);
+    }
+  }
+}
+
+Future<void> _dismissIncident(String eventId) async {
+  try {
+    await _updateIncidentAction(eventId, 'dismiss');
+
+    if (!mounted) return;
+
+    _refreshIncidents();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          tr(context, 'تم استبعاد التنبيه', 'Alert dismissed'),
+        ),
+      ),
+    );
+  } catch (error) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          tr(
+            context,
+            'تعذر استبعاد التنبيه. حاولي مرة أخرى.',
+            'Could not dismiss the alert. Please try again.',
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> _openIncidentDetails(
+  Map<String, dynamic> incident,
+) async {
+  final eventId = incident['eventId']?.toString() ?? '';
+  if (eventId.isEmpty) return;
+
+  try {
+    await _updateIncidentAction(eventId, 'open');
+
+    if (!mounted) return;
+
+    _refreshIncidents();
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        final dark =
+            Theme.of(dialogContext).brightness == Brightness.dark;
+
+        final type = incident['detectionType']?.toString() ?? '';
+        final deviceId = incident['deviceId']?.toString() ?? '—';
+
+        return AlertDialog(
+          title: Text(_threatName(dialogContext, type)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '${tr(dialogContext, 'الجهاز', 'Device')}: $deviceId',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '${tr(dialogContext, 'التوقيت', 'Time')}: '
+                '${_incidentTime(incident['createdAt'])}',
+              ),
+              const SizedBox(height: 8),
+              Text(
+                tr(dialogContext, 'تم التأكيد', 'Confirmed'),
+                style: TextStyle(
+                  color: RaqeebColors.accent(dark),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(tr(dialogContext, 'إغلاق', 'Close')),
+            ),
+          ],
+        );
+      },
+    );
+  } catch (_) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          tr(
+            context,
+            'تعذر فتح تفاصيل الحادث',
+            'Could not open incident details',
+          ),
+        ),
+      ),
+    );
+  }
+}
+
   Widget _serverIncidentCard(
     BuildContext context,
     Map<String, dynamic> incident,
@@ -253,7 +494,10 @@ class _AlertsScreenState extends State<AlertsScreen> {
           color: RaqeebColors.secondary(dark).withValues(alpha: 0.35),
         ),
       ),
-      child: Padding(
+        child: InkWell(
+    borderRadius: BorderRadius.circular(16),
+    onTap: () => _openIncidentDetails(incident),
+    child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -309,39 +553,54 @@ class _AlertsScreenState extends State<AlertsScreen> {
             ),
             const SizedBox(height: 8),
             
-          if (incident['videoAvailable'] == true)
-            OutlinedButton.icon(
-              onPressed: () {
-                final eventId = incident['eventId']?.toString() ?? '';
 
-                if (eventId.isNotEmpty) {
-                  _openIncidentVideo(context, eventId);
-                }
-              },
-              icon: const Icon(Icons.play_circle_outline),
-              label: Text(
-                tr(context, 'مشاهدة التسجيل', 'View Recording'),
-              ),
-            )
-          else
-            Text(
-              tr(context, 'لا يوجد تسجيل متاح', 'No recording available'),
-              style: TextStyle(
-                color: RaqeebColors.secondary(dark),
-                fontSize: 12,
-              ),
-            ),
+OutlinedButton.icon(
+  onPressed: () {
+    final eventId = incident['eventId']?.toString() ?? '';
 
-          ],
+    if (eventId.isNotEmpty) {
+      _dismissIncident(eventId);
+    }
+  },
+  icon: const Icon(Icons.close_rounded),
+  label: Text(tr(context, 'استبعاد', 'Dismiss')),
+),
+const SizedBox(height: 8),
+
+if (incident['videoAvailable'] == true)
+  OutlinedButton.icon(
+    onPressed: () {
+      final eventId = incident['eventId']?.toString() ?? '';
+
+      if (eventId.isNotEmpty) {
+        _openIncidentVideo(context, eventId);
+      }
+    },
+    icon: const Icon(Icons.play_circle_outline),
+    label: Text(
+      tr(context, 'مشاهدة التسجيل', 'View Recording'),
+    ),
+  )
+else
+  Text(
+    tr(context, 'لا يوجد تسجيل متاح', 'No recording available'),
+    style: TextStyle(
+      color: RaqeebColors.secondary(dark),
+      fontSize: 12,
+    ),
+  ),
+
+
+                   ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final store = IncidentStore.instance;
 
     return Scaffold(
       backgroundColor: RaqeebColors.background(dark),
@@ -349,6 +608,11 @@ class _AlertsScreenState extends State<AlertsScreen> {
         centerTitle: true,
         title: Text(tr(context, 'التنبيهات', 'Alerts')),
         actions: [
+          TextButton.icon(
+  onPressed: _readingAll ? null : _readAllIncidents,
+  icon: const Icon(Icons.done_all_rounded),
+  label: Text(tr(context, 'قراءة الكل', 'Read All')),
+),
           IconButton(
             tooltip: tr(context, 'تحديث', 'Refresh'),
             onPressed: _refreshIncidents,
@@ -356,190 +620,69 @@ class _AlertsScreenState extends State<AlertsScreen> {
           ),
         ],
       ),
-      body: AnimatedBuilder(
-        animation: store,
-        builder: (context, _) {
-          final demoIncidents = store.newItems;
-
-          return ListView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 18,
-              vertical: 16,
+      body: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        children: [
+          Text(
+            tr(context, 'التنبيهات', 'Alerts'),
+            style: TextStyle(
+              color: RaqeebColors.text(dark),
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
             ),
-            children: [
-              Text(
-                tr(context, 'التنبيهات من السيرفر', 'Server alerts'),
-                style: TextStyle(
-                  color: RaqeebColors.text(dark),
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              FutureBuilder<List<Map<String, dynamic>>>(
-                future: _serverIncidents,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState != ConnectionState.done) {
-                    return const Padding(
-                      padding: EdgeInsets.all(32),
-                      child: Center(
-                        child: CircularProgressIndicator(),
-                      ),
-                    );
-                  }
-
-                  if (snapshot.hasError) {
-                    return Column(
-                      children: [
-                        Text(
-                          _errorMessage(context, snapshot.error!),
-                          style: TextStyle(
-                            color: RaqeebColors.text(dark),
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          onPressed: _refreshIncidents,
-                          icon: const Icon(Icons.refresh),
-                          label: Text(
-                            tr(context, 'إعادة المحاولة', 'Retry'),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-
-                  final incidents = snapshot.data ?? [];
-
-                  // Only pending incidents belong in the alerts screen.
-                  final pending = incidents.where((incident) {
-                    final status =
-                        incident['status']?.toString() ?? 'pending';
-                    return status == 'pending';
-                  }).toList();
-
-                  if (pending.isEmpty) {
-                    return EmptyIncidents(
-                      icon: Icons.notifications_none_rounded,
-                      title: tr(
-                        context,
-                        'لا توجد حوادث جديدة على السيرفر',
-                        'No new server incidents',
-                      ),
-                      subtitle: tr(
-                        context,
-                        'تم الاتصال بالسيرفر، لكن لا توجد حوادث بانتظار المراجعة.',
-                        'Connected to the server, but no incidents are awaiting review.',
-                      ),
-                    );
-                  }
-
-                  return Column(
-                    children: pending
-                        .map(
-                          (incident) => _serverIncidentCard(
-                            context,
-                            incident,
-                            dark,
-                          ),
-                        )
-                        .toList(),
-                  );
-                },
-              ),
-
-              const SizedBox(height: 24),
-
-              DemoBanner(
-                onAdd: () => store.addDemoIncident(),
-                onClear: store.items.any((item) => item.isDemo)
-                    ? () => _confirmClear(context)
-                    : null,
-              ),
-              const SizedBox(height: 22),
-              Text(
-                tr(
-                  context,
-                  'التنبيهات المحلية',
-                  'Local alerts',
-                ),
-                style: TextStyle(
-                  color: RaqeebColors.text(dark),
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                tr(
-                  context,
-                  'تنبيهات محفوظة على هذا الجهاز لأغراض الاختبار.',
-                  'Alerts stored on this device for testing.',
-                ),
-                style: TextStyle(
-                  color: RaqeebColors.secondary(dark),
-                ),
-              ),
-              const SizedBox(height: 18),
-              if (demoIncidents.isEmpty)
-                EmptyIncidents(
+          ),
+          const SizedBox(height: 12),
+          FutureBuilder<List<Map<String, dynamic>>>(
+            future: _serverIncidents,
+            builder: (context, snapshot) {
+              if (snapshot.connectionState != ConnectionState.done) {
+                return const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Center(child: CircularProgressIndicator()),
+                );
+              }
+              if (snapshot.hasError) {
+                return Column(
+                  children: [
+                    Text(
+                      _errorMessage(context, snapshot.error!),
+                      style: TextStyle(color: RaqeebColors.text(dark)),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: _refreshIncidents,
+                      icon: const Icon(Icons.refresh),
+                      label: Text(tr(context, 'إعادة المحاولة', 'Retry')),
+                    ),
+                  ],
+                );
+              }
+              final incidents = snapshot.data ?? [];
+              final unread = incidents.where((incident) {
+                final status = incident['status']?.toString() ?? 'confirmed';
+                return status == 'confirmed' && incident['readAt'] == null;
+              }).toList();
+              if (unread.isEmpty) {
+                return EmptyIncidents(
                   icon: Icons.notifications_none_rounded,
-                  title: tr(
-                    context,
-                    'لا توجد تنبيهات محلية',
-                    'No local alerts',
-                  ),
+                  title: tr(context, 'لا توجد تنبيهات جديدة', 'No new alerts'),
                   subtitle: tr(
                     context,
-                    'يمكنك إضافة تنبيه تجريبي من الأعلى.',
-                    'You can add a demo alert above.',
+                    'لا توجد حوادث غير مقروءة حاليًا.',
+                    'There are no unread incidents right now.',
                   ),
-                )
-              else
-                ...demoIncidents.map(
-                  (incident) => Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: IncidentCard(incident: incident),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-
-  Future<void> _confirmClear(BuildContext context) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(
-          tr(context, 'حذف البيانات التجريبية؟', 'Clear demo data?'),
-        ),
-        content: Text(
-          tr(
-            context,
-            'سيتم حذف التنبيهات التجريبية فقط من هذا الجهاز.',
-            'Only local demo alerts will be removed from this device.',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: Text(tr(context, 'إلغاء', 'Cancel')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: Text(tr(context, 'حذف التجريبي', 'Clear demo')),
+                );
+              }
+              return Column(
+                children: unread
+                    .map((incident) => _serverIncidentCard(context, incident, dark))
+                    .toList(),
+              );
+            },
           ),
         ],
       ),
     );
-
-    if (confirmed == true) {
-      await IncidentStore.instance.clearDemoIncidents();
-    }
   }
 }
