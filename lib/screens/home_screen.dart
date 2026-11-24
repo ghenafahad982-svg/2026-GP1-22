@@ -38,16 +38,15 @@ class _HomeScreenState extends State<HomeScreen> {
     return '${two(date.day)}-${two(date.month)}-${date.year} • '
         '$hour:${two(date.minute)} $period';
   }
-  // Keep the original Firebase emulator endpoint for local testing.
   static const String statusUrl =
-      'http://192.168.100.135:5001/raqeeb-gp1/us-central1/getDeviceStatus';
+      'https://raqeebserver.onrender.com/officer/device-status';
 
   @override
   void initState() {
     super.initState();
     _recentAlertsFuture = _fetchRecentAlerts();
     checkDeviceStatus();
-    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) => checkDeviceStatus());
+    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) => checkDeviceStatus());
   }
 
 Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
@@ -103,21 +102,40 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
   return incidents.take(2).toList();
 }
 
+  bool _checkingDeviceStatus = false;
+
   Future<void> checkDeviceStatus() async {
+    if (_checkingDeviceStatus) return;
+    _checkingDeviceStatus = true;
     try {
-      final response = await http.get(Uri.parse(statusUrl))
-          .timeout(const Duration(seconds: 4));
-      if (!mounted) return;
-      setState(() {
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          deviceStatus = data['status'] == 'online' ? 'online' : 'offline';
-        } else {
-          deviceStatus = 'error';
-        }
-      });
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) throw StateError('not_signed_in');
+      final token = await user.getIdToken();
+      if (token == null || token.isEmpty) throw StateError('missing_token');
+      final response = await http.get(
+        Uri.parse(statusUrl),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) throw StateError('status_error');
+      final data = jsonDecode(response.body);
+      if (data is! Map<String, dynamic> ||
+          data['success'] != true || data['online'] is! bool) {
+        throw const FormatException('Invalid device status response');
+      }
+      final nextStatus = data['online'] == true ? 'online' : 'offline';
+      if (mounted && deviceStatus != nextStatus) {
+        setState(() => deviceStatus = nextStatus);
+      }
     } catch (_) {
-      if (mounted) setState(() => deviceStatus = 'error');
+      if (mounted && deviceStatus != 'error') {
+        setState(() => deviceStatus = 'error');
+      }
+    } finally {
+      _checkingDeviceStatus = false;
     }
   }
 
@@ -172,7 +190,9 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
               Text(tr(context, 'نظام المراقبة الذكي', 'Intelligent Monitoring System'),
                   style: TextStyle(color: secondary, fontSize: 12)),
             ])),
-            
+            Container(padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(14)),
+              child: Icon(Icons.shield_outlined, color: accent, size: 25)),
           ]),
           const SizedBox(height: 36),
 

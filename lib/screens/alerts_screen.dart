@@ -1,5 +1,8 @@
 
+import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/services.dart';
 import 'incident_video_player_page.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -20,6 +23,8 @@ class _AlertsScreenState extends State<AlertsScreen> {
       'https://raqeebserver.onrender.com/incidents';
 
   late Future<List<Map<String, dynamic>>> _serverIncidents;
+  final Set<String> _expandedIds = <String>{};
+  final Set<String> _busyIds = <String>{};
 
   @override
   void initState() {
@@ -79,36 +84,78 @@ class _AlertsScreenState extends State<AlertsScreen> {
         .toList();
   }
 
-  Future<void> _openIncidentVideo(
-    BuildContext context,
-    String eventId,
-  ) async {
+  Future<void> _openIncidentVideo(String eventId) async {
+    if (_busyIds.contains(eventId)) return;
+    setState(() => _busyIds.add(eventId));
     try {
+      // A signed URL must be available before we consider the video opened.
       final videoUrl = await _fetchVideoUrl(eventId);
+      if (!mounted) return;
 
-      if (!context.mounted) return;
-
-      await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => IncidentVideoPlayerPage(
-            videoUrl: videoUrl,
-          ),
+      // Start playback, then mark read. Opening a card alone never marks read.
+      unawaited(Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(
+          builder: (_) => IncidentVideoPlayerPage(videoUrl: videoUrl),
         ),
-      );
-    } catch (error) {
-      if (!context.mounted) return;
+      ).then((_) {}));
 
+      try {
+        await _updateIncidentAction(eventId, 'open');
+        if (mounted) _refreshIncidents();
+      } catch (_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(tr(
+            context,
+            'تم فتح الفيديو لكن تعذر نقل الحادث إلى السجل. أعيدي المحاولة.',
+            'Video opened, but the incident could not be moved to History. Try again.',
+          ))),
+        );
+      }
+    } catch (_) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            tr(
-              context,
-              'تعذر فتح تسجيل الحادث',
-              'Could not open incident recording',
-            ),
-          ),
-        ),
+        SnackBar(content: Text(tr(
+          context,
+          'تعذر فتح تسجيل الحادث',
+          'Could not open incident recording',
+        ))),
       );
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(eventId));
+    }
+  }
+
+  Future<void> _confirmDismiss(String eventId) async {
+    if (eventId.isEmpty || _busyIds.contains(eventId)) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr(dialogContext, 'استبعاد الحادث', 'Dismiss incident')),
+        content: Text(tr(
+          dialogContext,
+          'هل تريد استبعاد هذا الحادث؟ سيختفي من التنبيهات والسجل، مع الاحتفاظ ببياناته في النظام.',
+          'Dismiss this incident? It will disappear from Alerts and History, but its data will remain stored.',
+        )),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(tr(dialogContext, 'إلغاء', 'Cancel')),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB83B3B)),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(tr(dialogContext, 'استبعاد', 'Dismiss')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() => _busyIds.add(eventId));
+    try {
+      await _dismissIncident(eventId);
+    } finally {
+      if (mounted) setState(() => _busyIds.remove(eventId));
     }
   }
 
@@ -258,19 +305,6 @@ Future<void> _updateIncidentAction(
     }
   }
 
-  String _incidentTime(dynamic raw) {
-    if (raw is! String || raw.isEmpty) return '—';
-
-    final parsed = DateTime.tryParse(raw);
-    if (parsed == null) return raw;
-
-    final local = parsed.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-
-    return '${local.year}-${two(local.month)}-${two(local.day)} '
-        '${two(local.hour)}:${two(local.minute)}';
-  }
-
 bool _readingAll = false;
 
 Future<void> _readAllIncidents() async {
@@ -397,167 +431,65 @@ Future<void> _dismissIncident(String eventId) async {
   }
 }
 
-  String _confidenceText(dynamic confidence) {
-    if (confidence is! num) return '—';
-    return '${(confidence * 100).clamp(0, 100).toStringAsFixed(0)}%';
+  DateTime? _localDate(Object? value) {
+    if (value is! String) return null;
+    return DateTime.tryParse(value)?.toLocal();
   }
 
-  Future<void> _openIncidentDetails(Map<String, dynamic> incident) async {
-    final eventId = incident['eventId']?.toString() ?? '';
-    if (eventId.isEmpty) return;
-
-    try {
-      // Opening details marks this alert as read and moves it to History.
-      await _updateIncidentAction(eventId, 'open');
-      if (!mounted) return;
-      _refreshIncidents();
-
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) {
-          final theme = Theme.of(dialogContext);
-          final dark = theme.brightness == Brightness.dark;
-          final type = incident['detectionType']?.toString() ?? '';
-          final deviceId = incident['deviceId']?.toString() ?? '—';
-          final videoAvailable = incident['videoAvailable'] == true;
-          final green = dark ? const Color(0xFF9AB89B) : const Color(0xFF426B4C);
-
-          return AlertDialog(
-            insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-            titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
-            contentPadding: const EdgeInsets.fromLTRB(24, 8, 24, 12),
-            title: Row(
-              children: [
-                const Icon(Icons.warning_amber_rounded, color: Color(0xFFD89425)),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    _threatName(dialogContext, type),
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ],
-            ),
-            content: SizedBox(
-              width: 390,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Divider(),
-                  const SizedBox(height: 8),
-                  _detailRow(
-                    dialogContext,
-                    Icons.devices_outlined,
-                    tr(dialogContext, 'الجهاز', 'Device'),
-                    deviceId,
-                  ),
-                  const SizedBox(height: 14),
-                  _detailRow(
-                    dialogContext,
-                    Icons.schedule_outlined,
-                    tr(dialogContext, 'التوقيت', 'Time'),
-                    _incidentTime(incident['createdAt']),
-                  ),
-                  const SizedBox(height: 14),
-                  _detailRow(
-                    dialogContext,
-                    Icons.analytics_outlined,
-                    tr(dialogContext, 'نسبة الثقة', 'Confidence'),
-                    _confidenceText(incident['confidence']),
-                  ),
-                  const SizedBox(height: 16),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                    decoration: BoxDecoration(
-                      color: green.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.check_circle_outline_rounded, color: green, size: 18),
-                        const SizedBox(width: 8),
-                        Text(
-                          tr(dialogContext, 'تم التأكيد', 'Confirmed'),
-                          style: TextStyle(color: green, fontWeight: FontWeight.w600),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (!videoAvailable) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      tr(dialogContext, 'لا يوجد تسجيل متاح', 'No recording available'),
-                      style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 13),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            actionsPadding: const EdgeInsets.fromLTRB(18, 4, 18, 16),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: Text(tr(dialogContext, 'إغلاق', 'Close')),
-              ),
-              if (videoAvailable)
-                FilledButton.icon(
-                  onPressed: () async {
-                    Navigator.of(dialogContext).pop();
-                    await _openIncidentVideo(context, eventId);
-                  },
-                  style: FilledButton.styleFrom(
-                    backgroundColor: dark
-                        ? const Color(0xFF507E59)
-                        : const Color(0xFF426B4C),
-                    foregroundColor: Colors.white,
-                  ),
-                  icon: const Icon(Icons.play_circle_outline_rounded),
-                  label: Text(tr(dialogContext, 'مشاهدة التسجيل', 'View Recording')),
-                ),
-            ],
-          );
-        },
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(tr(
-            context,
-            'تعذر فتح تفاصيل الحادث',
-            'Could not open incident details',
-          )),
-        ),
-      );
-    }
+  String _incidentDate(Object? value) {
+    final date = _localDate(value);
+    if (date == null) return '—';
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(date.day)}-${two(date.month)}-${date.year}';
   }
 
-  Widget _detailRow(
-    BuildContext context,
-    IconData icon,
-    String label,
-    String value,
-  ) {
+  String _incidentClock(Object? value, BuildContext context) {
+    final date = _localDate(value);
+    if (date == null) return '—';
+    final hour = date.hour % 12 == 0 ? 12 : date.hour % 12;
+    final minute = date.minute.toString().padLeft(2, '0');
+    final marker = date.hour < 12
+        ? tr(context, 'ص', 'AM')
+        : tr(context, 'م', 'PM');
+    return '$hour:$minute $marker';
+  }
+
+  String _shortId(String eventId) =>
+      eventId.length <= 8 ? eventId : eventId.substring(0, 8).toUpperCase();
+
+  Widget _infoRow(BuildContext context, String label, String value) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, size: 19, color: RaqeebColors.secondary(dark)),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(label, style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 12)),
-              const SizedBox(height: 3),
-              Text(value, style: TextStyle(color: RaqeebColors.text(dark), fontWeight: FontWeight.w600)),
-            ],
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              label,
+              textAlign: TextAlign.start,
+              style: TextStyle(
+                color: RaqeebColors.secondary(dark),
+                fontSize: 12,
+              ),
+            ),
           ),
-        ),
-      ],
+          const SizedBox(height: 4),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              value,
+              textAlign: TextAlign.start,
+              style: TextStyle(
+                color: RaqeebColors.text(dark),
+                fontWeight: FontWeight.w600,
+                fontSize: 14,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -566,28 +498,29 @@ Future<void> _dismissIncident(String eventId) async {
     Map<String, dynamic> incident,
     bool dark,
   ) {
+    final eventId = incident['eventId']?.toString() ?? '';
     final type = incident['detectionType']?.toString() ?? '';
     final deviceId = incident['deviceId']?.toString() ?? '—';
-    final eventId = incident['eventId']?.toString() ?? '';
     final videoAvailable = incident['videoAvailable'] == true;
-    final theme = Theme.of(context);
-    final green = dark ? const Color(0xFF507E59) : const Color(0xFF426B4C);
-    final red = dark ? const Color(0xFFEF9A9A) : const Color(0xFFB83B3B);
-    final cardColor = theme.colorScheme.surface;
+    final expanded = _expandedIds.contains(eventId);
+    final busy = _busyIds.contains(eventId);
+    final green = dark ? const Color(0xFF3F8059) : const Color(0xFF426B4C);
+    final red = dark ? const Color(0xFFEB8587) : const Color(0xFFB83B3B);
+    final warning = dark ? const Color(0xFFE28B8E) : const Color(0xFFB83B45);
 
     final dismissButton = SizedBox(
       height: 46,
       width: double.infinity,
       child: OutlinedButton.icon(
-        onPressed: eventId.isEmpty ? null : () => _dismissIncident(eventId),
+        onPressed: eventId.isEmpty || busy ? null : () => _confirmDismiss(eventId),
         style: OutlinedButton.styleFrom(
           foregroundColor: red,
-          side: BorderSide(color: red.withValues(alpha: 0.75), width: 1.2),
+          side: BorderSide(color: red.withValues(alpha: 0.8)),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           padding: const EdgeInsets.symmetric(horizontal: 8),
         ),
         icon: const Icon(Icons.close_rounded, size: 19),
-        label: Text(tr(context, 'استبعاد', 'Dismiss'), maxLines: 1),
+        label: Text(tr(context, 'استبعاد', 'Dismiss')),
       ),
     );
 
@@ -595,9 +528,8 @@ Future<void> _dismissIncident(String eventId) async {
       height: 46,
       width: double.infinity,
       child: FilledButton.icon(
-        onPressed: !videoAvailable || eventId.isEmpty
-            ? null
-            : () => _openIncidentVideo(context, eventId),
+        onPressed: !videoAvailable || eventId.isEmpty || busy
+            ? null : () => _openIncidentVideo(eventId),
         style: FilledButton.styleFrom(
           backgroundColor: green,
           foregroundColor: Colors.white,
@@ -612,7 +544,7 @@ Future<void> _dismissIncident(String eventId) async {
         ),
         label: Text(
           videoAvailable
-              ? tr(context, 'مشاهدة التسجيل', 'View Recording')
+              ? tr(context, 'مشاهدة الفيديو', 'View Video')
               : tr(context, 'لا يوجد تسجيل', 'No Recording'),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -623,128 +555,159 @@ Future<void> _dismissIncident(String eventId) async {
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
       elevation: 0,
-      color: cardColor,
+      color: dark ? const Color(0xFF1D2D26) : Theme.of(context).colorScheme.surface,
       clipBehavior: Clip.antiAlias,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
-        side: BorderSide(color: RaqeebColors.secondary(dark).withValues(alpha: 0.24)),
+        side: BorderSide(color: warning.withValues(alpha: dark ? 0.30 : 0.22)),
       ),
-      child: InkWell(
-        onTap: eventId.isEmpty ? null : () => _openIncidentDetails(incident),
-        mouseCursor: SystemMouseCursors.click,
-        hoverColor: green.withValues(alpha: dark ? 0.12 : 0.05),
-        splashColor: green.withValues(alpha: 0.12),
+      child: Container(
+        decoration: BoxDecoration(
+          border: BorderDirectional(start: BorderSide(color: warning, width: 4)),
+        ),
         child: Padding(
-          padding: const EdgeInsets.all(18),
+          padding: const EdgeInsets.all(16),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    height: 42,
-                    width: 42,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFD89425).withValues(alpha: dark ? 0.18 : 0.11),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.warning_amber_rounded,
-                      color: Color(0xFFD89425),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _threatName(context, type),
-                          style: TextStyle(
-                            color: RaqeebColors.text(dark),
-                            fontWeight: FontWeight.w700,
-                            fontSize: 17,
-                          ),
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          _incidentTime(incident['createdAt']),
-                          style: TextStyle(
-                            color: RaqeebColors.secondary(dark),
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    Directionality.of(context) == TextDirection.rtl
-                        ? Icons.chevron_left_rounded
-                        : Icons.chevron_right_rounded,
-                    size: 27,
-                    color: green,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 13),
-              Wrap(
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: green.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      tr(context, 'تم التأكيد', 'Confirmed'),
-                      style: TextStyle(color: dark ? const Color(0xFF9AB89B) : green, fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                  ),
-                  Text(
-                    '${tr(context, 'الجهاز', 'Device')}: $deviceId',
-                    style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 12),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(Icons.touch_app_outlined, size: 17, color: green),
-                  const SizedBox(width: 6),
-                  Text(
-                    tr(context, 'اضغط لعرض التفاصيل', 'Tap to view details'),
-                    style: TextStyle(color: green, fontWeight: FontWeight.w600, fontSize: 12),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Divider(height: 1, color: RaqeebColors.secondary(dark).withValues(alpha: 0.18)),
-              const SizedBox(height: 14),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  if (constraints.maxWidth < 390) {
-                    return Column(
-                      children: [
-                        videoButton,
-                        const SizedBox(height: 9),
-                        dismissButton,
-                      ],
-                    );
-                  }
-                  return Row(
-                    children: [
-                      Expanded(child: dismissButton),
-                      const SizedBox(width: 10),
-                      Expanded(child: videoButton),
-                    ],
-                  );
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                mouseCursor: SystemMouseCursors.click,
+                onTap: eventId.isEmpty ? null : () {
+                  setState(() {
+                    if (expanded) {
+                      _expandedIds.remove(eventId);
+                    } else {
+                      _expandedIds.add(eventId);
+                    }
+                  });
                 },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.warning_amber_rounded, color: warning, size: 26),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(_threatName(context, type),
+                              style: TextStyle(
+                                color: RaqeebColors.text(dark),
+                                fontSize: 17, fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: warning.withValues(alpha: 0.10),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(tr(context, 'مؤكد', 'Confirmed'),
+                              style: TextStyle(color: warning, fontSize: 12, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Icon(expanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                            color: warning, size: 27),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (!expanded) ...[
+                        Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: Text(
+                            '${tr(context, 'رقم الحادث', 'Incident ID')}: ${_shortId(eventId)}',
+                            textAlign: TextAlign.start,
+                            style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 13),
+                          ),
+                        ),
+                        const SizedBox(height: 7),
+                        Align(
+                          alignment: AlignmentDirectional.centerStart,
+                          child: Text(
+                            _incidentDate(incident['createdAt']),
+                            textAlign: TextAlign.start,
+                            style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
               ),
+              if (expanded) ...[
+                const SizedBox(height: 4),
+                Divider(color: warning.withValues(alpha: 0.18)),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: Text(
+                    tr(context, 'رقم الحادث الكامل', 'Full Incident ID'),
+                    textAlign: TextAlign.start,
+                    style: TextStyle(
+                      color: RaqeebColors.secondary(dark), fontSize: 12,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: SelectableText(
+                        eventId,
+                        textAlign: TextAlign.start,
+                        style: TextStyle(
+                          color: RaqeebColors.text(dark),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    IconButton(
+                      tooltip: tr(context, 'نسخ رقم الحادث', 'Copy incident ID'),
+                      onPressed: eventId.isEmpty ? null : () async {
+                        await Clipboard.setData(ClipboardData(text: eventId));
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(tr(
+                            context, 'تم نسخ رقم الحادث', 'Incident ID copied',
+                          ))),
+                        );
+                      },
+                      icon: Icon(Icons.copy_rounded, color: green, size: 20),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                _infoRow(context, tr(context, 'نوع التهديد', 'Threat type'), _threatName(context, type)),
+                _infoRow(context, tr(context, 'تاريخ الحادث', 'Incident date'), _incidentDate(incident['createdAt'])),
+                _infoRow(context, tr(context, 'الوقت', 'Time'), _incidentClock(incident['createdAt'], context)),
+                _infoRow(context, tr(context, 'اسم الجهاز', 'Device name'), deviceId),
+                _infoRow(context, tr(context, 'حالة الحادث', 'Incident status'), tr(context, 'مؤكد', 'Confirmed')),
+              ],
+              const SizedBox(height: 12),
+              Divider(height: 1, color: warning.withValues(alpha: 0.18)),
+              const SizedBox(height: 14),
+              LayoutBuilder(builder: (context, constraints) {
+                if (constraints.maxWidth < 390) {
+                  return Column(children: [
+                    videoButton,
+                    const SizedBox(height: 9),
+                    dismissButton,
+                  ]);
+                }
+                return Row(children: [
+                  Expanded(child: dismissButton),
+                  const SizedBox(width: 10),
+                  Expanded(child: videoButton),
+                ]);
+              }),
             ],
           ),
         ),
@@ -755,9 +718,8 @@ Future<void> _dismissIncident(String eventId) async {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-
     return Scaffold(
-      backgroundColor: RaqeebColors.background(dark),
+      backgroundColor: dark ? const Color(0xFF14211B) : const Color(0xFFFFF7F6),
       appBar: AppBar(
         centerTitle: true,
         title: Text(tr(context, 'التنبيهات', 'Alerts')),
@@ -777,15 +739,6 @@ Future<void> _dismissIncident(String eventId) async {
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
         children: [
-          Text(
-            tr(context, 'التنبيهات', 'Alerts'),
-            style: TextStyle(
-              color: RaqeebColors.text(dark),
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 12),
           FutureBuilder<List<Map<String, dynamic>>>(
             future: _serverIncidents,
             builder: (context, snapshot) {
@@ -796,43 +749,35 @@ Future<void> _dismissIncident(String eventId) async {
                 );
               }
               if (snapshot.hasError) {
-                return Column(
-                  children: [
-                    Text(
-                      _errorMessage(context, snapshot.error!),
-                      style: TextStyle(color: RaqeebColors.text(dark)),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      onPressed: _refreshIncidents,
-                      icon: const Icon(Icons.refresh),
-                      label: Text(tr(context, 'إعادة المحاولة', 'Retry')),
-                    ),
-                  ],
-                );
+                return Column(children: [
+                  Text(_errorMessage(context, snapshot.error!),
+                    style: TextStyle(color: RaqeebColors.text(dark)),
+                    textAlign: TextAlign.center),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _refreshIncidents,
+                    icon: const Icon(Icons.refresh),
+                    label: Text(tr(context, 'إعادة المحاولة', 'Retry')),
+                  ),
+                ]);
               }
               final incidents = snapshot.data ?? [];
-              final unread = incidents.where((incident) {
-                final status = incident['status']?.toString() ?? 'confirmed';
-                return status == 'confirmed' && incident['readAt'] == null;
-              }).toList();
+              final unread = incidents.where((incident) =>
+                (incident['status']?.toString() ?? 'confirmed') == 'confirmed' &&
+                incident['readAt'] == null,
+              ).toList();
               if (unread.isEmpty) {
                 return EmptyIncidents(
                   icon: Icons.notifications_none_rounded,
                   title: tr(context, 'لا توجد تنبيهات جديدة', 'No new alerts'),
-                  subtitle: tr(
-                    context,
+                  subtitle: tr(context,
                     'لا توجد حوادث غير مقروءة حاليًا.',
-                    'There are no unread incidents right now.',
-                  ),
+                    'There are no unread incidents right now.'),
                 );
               }
-              return Column(
-                children: unread
-                    .map((incident) => _serverIncidentCard(context, incident, dark))
-                    .toList(),
-              );
+              return Column(children: unread
+                .map((incident) => _serverIncidentCard(context, incident, dark))
+                .toList());
             },
           ),
         ],

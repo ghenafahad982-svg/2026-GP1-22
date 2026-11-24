@@ -21,6 +21,11 @@ app = Flask(__name__)
 CORS(
     app,
     resources={
+        r"/officer/device-status": {
+    "origins": [r"^http://localhost(:[0-9]+)?$", r"^http://127\.0\.0\.1(:[0-9]+)?$"],
+    "methods": ["GET", "OPTIONS"],
+    "allow_headers": ["Authorization", "Content-Type"],
+},
         r"/incidents(?:/[^/]+/(?:video-url|action))?": {
             "origins": [
                 r"^http://localhost(:[0-9]+)?$",
@@ -254,7 +259,66 @@ def device_status():
         )
     })
 
+# Get the assigned device status for the authenticated officer
+@app.route("/officer/device-status", methods=["GET"])
+@require_officer_auth
+def get_officer_device_status():
+    officer_doc = db.collection("Users").document(
+        request.officer_uid
+    ).get()
 
+    if not officer_doc.exists:
+        return jsonify({
+            "success": False,
+            "message": "Officer profile not found"
+        }), 403
+
+    officer = officer_doc.to_dict() or {}
+
+    if officer.get("role") != "officer":
+        return jsonify({
+            "success": False,
+            "message": "Officer access required"
+        }), 403
+
+    device_id = officer.get("deviceId")
+
+    if not device_id:
+        return jsonify({
+            "success": False,
+            "message": "No assigned device"
+        }), 403
+
+    device_doc = db.collection("devices").document(device_id).get()
+
+    if not device_doc.exists:
+        return jsonify({
+            "success": True,
+            "deviceId": device_id,
+            "online": False,
+            "detectionStatus": "unknown"
+        }), 200
+
+    device_data = device_doc.to_dict() or {}
+    last_seen = device_data.get("lastSeen")
+
+    online = False
+
+    if isinstance(last_seen, datetime):
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+
+        elapsed = datetime.now(timezone.utc) - last_seen
+        online = timedelta(0) <= elapsed <= timedelta(seconds=90)
+
+    return jsonify({
+        "success": True,
+        "deviceId": device_id,
+        "online": online,
+        "detectionStatus": device_data.get(
+            "detectionStatus", "unknown"
+        )
+    }), 200
 # Receive a confirmed weapon detection and send an immediate FCM alert
 @app.route("/incident/start", methods=["POST"])
 @require_device_token
