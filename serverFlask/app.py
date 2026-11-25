@@ -317,7 +317,7 @@ def get_officer_device_status():
             last_seen = last_seen.replace(tzinfo=timezone.utc)
 
         elapsed = datetime.now(timezone.utc) - last_seen
-        online = timedelta(0) <= elapsed <= timedelta(seconds=90)
+        online = timedelta(0) <= elapsed <= timedelta(seconds=45)
 
     return jsonify({
         "success": True,

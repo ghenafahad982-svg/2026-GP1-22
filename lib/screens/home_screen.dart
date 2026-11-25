@@ -46,7 +46,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _recentAlertsFuture = _fetchRecentAlerts();
     checkDeviceStatus();
-    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) => checkDeviceStatus());
+    _statusTimer = Timer.periodic(const Duration(seconds: 5), (_) => checkDeviceStatus());
   }
 
 Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
@@ -103,6 +103,7 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
 }
 
   bool _checkingDeviceStatus = false;
+  int _consecutiveStatusFailures = 0;
 
   Future<void> checkDeviceStatus() async {
     if (_checkingDeviceStatus) return;
@@ -126,12 +127,15 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
           data['success'] != true || data['online'] is! bool) {
         throw const FormatException('Invalid device status response');
       }
+      _consecutiveStatusFailures = 0;
       final nextStatus = data['online'] == true ? 'online' : 'offline';
       if (mounted && deviceStatus != nextStatus) {
         setState(() => deviceStatus = nextStatus);
       }
     } catch (_) {
-      if (mounted && deviceStatus != 'error') {
+      // Do not flash 'Unavailable' for a single transient request failure.
+      _consecutiveStatusFailures++;
+      if (_consecutiveStatusFailures >= 3 && mounted && deviceStatus != 'error') {
         setState(() => deviceStatus = 'error');
       }
     } finally {
