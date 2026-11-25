@@ -179,31 +179,15 @@ class _LoginScreenState extends State<LoginScreen> {
                     Center(
                       child: Image.asset(
                         'assets/images/raqeeb_logo.png',
-                        width: 96,
-                        height: 96,
+                        width: 190,
+                        height: 230,
                         fit: BoxFit.contain,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Text(
-                      tr(context, 'رقيب', 'Raqeeb'),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 34,
-                        fontWeight: FontWeight.bold,
-                        color: primary,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      tr(context, 'نظام المراقبة الذكي',
-                          'Intelligent Monitoring System'),
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 16, color: accent),
-                    ),
-                    const SizedBox(height: 42),
+                    const SizedBox(height: 30),
                     Text(
                       tr(context, 'تسجيل الدخول', 'Sign In'),
+                      textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 25,
                         fontWeight: FontWeight.bold,
@@ -214,6 +198,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     Text(
                       tr(context, 'مرحبًا بعودتك إلى نظام رقيب',
                           'Welcome back to Raqeeb'),
+                      textAlign: TextAlign.center,
                       style: TextStyle(color: secondary, fontSize: 14),
                     ),
                     const SizedBox(height: 28),
