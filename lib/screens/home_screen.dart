@@ -182,7 +182,7 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
           Row(children: [
             Container(width: 56, height: 56, padding: const EdgeInsets.all(5),
               decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(16)),
-              child: Image.asset('assets/images/raqeeb_logo.png', fit: BoxFit.contain)),
+              child: Image.asset('assets/images/raqeeb_logo_icon.png', fit: BoxFit.contain)),
             const SizedBox(width: 12),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(tr(context, 'رقيب', 'Raqeeb'),
@@ -190,9 +190,7 @@ Future<List<Map<String, dynamic>>> _fetchRecentAlerts() async {
               Text(tr(context, 'نظام المراقبة الذكي', 'Intelligent Monitoring System'),
                   style: TextStyle(color: secondary, fontSize: 12)),
             ])),
-            Container(padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(color: card, borderRadius: BorderRadius.circular(14)),
-              child: Icon(Icons.shield_outlined, color: accent, size: 25)),
+            
           ]),
           const SizedBox(height: 36),
 
