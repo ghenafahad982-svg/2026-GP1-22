@@ -21,6 +21,14 @@ app = Flask(__name__)
 CORS(
     app,
     resources={
+        r"/auth/employee-login": {
+            "origins": [
+                r"^http\://localhost(:[0-9]+)?$",
+                r"^http\://127\.0\.0\.1(:[0-9]+)?$",
+            ],
+            "methods": ["POST", "OPTIONS"],
+            "allow_headers": ["Content-Type"],
+        },
         r"/officer/device-status": {
     "origins": [r"^http://localhost(:[0-9]+)?$", r"^http://127\.0\.0\.1(:[0-9]+)?$"],
     "methods": ["GET", "OPTIONS"],
@@ -781,6 +789,88 @@ def get_incident_video_url(event_id):
         "eventId": event_id,
         "signedUrl": signed_url
     })
+
+# Log in with employee ID + password, retaining the SAME Firebase user/UID.
+# Requires FIREBASE_WEB_API_KEY in the server environment.
+# Firebase Authentication is the authority for password verification.
+@app.route("/auth/employee-login", methods=["POST"])
+def login_by_employee_id():
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError, URLError
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({"success": False, "message": "Invalid request"}), 400
+
+    employee_id = str(payload.get("employeeId") or "").strip()
+    password = payload.get("password")
+    if (not employee_id.isascii() or not employee_id.isdigit()
+            or not 1 <= len(employee_id) <= 20
+            or not isinstance(password, str) or not password
+            or len(password) > 1024):
+        return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+    firebase_api_key = os.environ.get("FIREBASE_WEB_API_KEY")
+    if not firebase_api_key:
+        app.logger.error("FIREBASE_WEB_API_KEY is not configured")
+        return jsonify({"success": False, "message": "Login unavailable"}), 503
+
+    try:
+        matches = list(db.collection("Users")
+                       .where("employeeId", "==", employee_id)
+                       .limit(2).stream())
+        if len(matches) != 1:
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+        officer = matches[0].to_dict() or {}
+        if officer.get("role") != "officer":
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+        uid = matches[0].id
+        # Read the canonical email from Auth, not a user-editable Firestore field.
+        auth_user = auth.get_user(uid)
+        if auth_user.disabled or not auth_user.email:
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+        verify_url = (
+            "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword"
+            f"?key={firebase_api_key}"
+        )
+        verify_body = json.dumps({
+            "email": auth_user.email,
+            "password": password,
+            "returnSecureToken": True,
+        }).encode("utf-8")
+        verify_request = Request(
+            verify_url, data=verify_body,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        try:
+            with urlopen(verify_request, timeout=12) as response:
+                verified = json.load(response)
+        except HTTPError:
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+        except (URLError, TimeoutError):
+            return jsonify({"success": False, "message": "Login temporarily unavailable"}), 503
+
+        id_token = verified.get("idToken")
+        if not isinstance(id_token, str):
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+        verified_uid = auth.verify_id_token(id_token).get("uid")
+        if verified_uid != uid:
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
+
+        # Flutter signs into the existing Firebase account using this custom token.
+        custom_token = auth.create_custom_token(uid)
+        if isinstance(custom_token, bytes):
+            custom_token = custom_token.decode("utf-8")
+        response = jsonify({"success": True, "customToken": custom_token})
+        response.headers["Cache-Control"] = "no-store"
+        return response, 200
+    except Exception:
+        app.logger.exception("Employee login backend error")
+        return jsonify({"success": False, "message": "Login temporarily unavailable"}), 503
+
 
 # Run Flask server
 if __name__ == "__main__":
