@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -6,8 +7,11 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
+
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
+
 import 'firebase_options.dart';
 import 'services/notification_service.dart';
 import 'raqeeb_ui.dart';
@@ -44,26 +48,25 @@ Future<void> dismissRaqeebIncident(String incidentId) async {
     '${Uri.encodeComponent(incidentId)}/action',
   );
 
-  final response = await http.post(
-    uri,
-    headers: {
-      'Authorization': 'Bearer $token',
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: jsonEncode({'action': 'dismiss'}),
-  ).timeout(const Duration(seconds: 30));
+  final response = await http
+      .post(
+        uri,
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: jsonEncode({'action': 'dismiss'}),
+      )
+      .timeout(const Duration(seconds: 30));
 
   if (response.statusCode != 200) {
-    throw Exception(
-      'dismiss_failed_${response.statusCode}',
-    );
+    throw Exception('dismiss_failed_${response.statusCode}');
   }
 
   final result = jsonDecode(response.body);
 
-  if (result is! Map<String, dynamic> ||
-      result['success'] != true) {
+  if (result is! Map<String, dynamic> || result['success'] != true) {
     throw Exception('invalid_dismiss_response');
   }
 }
@@ -79,100 +82,121 @@ void showRaqeebForegroundAlert({
     _handledForegroundIncidentIds.remove(_handledForegroundIncidentIds.first);
   }
 
-  _foregroundAlertQueue = _foregroundAlertQueue.then((_) async {
-    if (FirebaseAuth.instance.currentUser == null) return;
+  _foregroundAlertQueue = _foregroundAlertQueue
+      .then((_) async {
+        if (FirebaseAuth.instance.currentUser == null) return;
 
-    // A message may arrive while Flutter is still building its first frame.
-    for (var attempt = 0; attempt < 10; attempt++) {
-      if (raqeebNavigatorKey.currentState?.overlay != null) break;
-      await Future<void>.delayed(const Duration(milliseconds: 200));
-    }
-    final navigator = raqeebNavigatorKey.currentState;
-    final context = navigator?.overlay?.context;
-    if (context == null || !context.mounted) {
-      debugPrint('FCM popup skipped: navigator not available');
-      return;
-    }
-bool dismissInProgress = false;
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => PopScope(
-        canPop: false,
-        child: AlertDialog(
-          icon: const Icon(
-            Icons.warning_amber_rounded,
-            color: Color(0xFFB83F45),
-            size: 46,
-          ),
-          title: Text(title, textAlign: TextAlign.center),
-          content: Text(body, textAlign: TextAlign.center),
-          actionsAlignment: MainAxisAlignment.spaceBetween,
-          actions: [
-
-TextButton(
-  onPressed: () async {
-    if (dismissInProgress) return;
-
-    dismissInProgress = true;
-
-    try {
-      await dismissRaqeebIncident(incidentId);
-
-      if (!dialogContext.mounted) return;
-
-      Navigator.of(dialogContext).pop();
-    } catch (error) {
-      if (!dialogContext.mounted) return;
-
-      ScaffoldMessenger.of(dialogContext).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Could not dismiss the alert. Please try again.',
-          ),
-        ),
-      );
-    } finally {
-      dismissInProgress = false;
-    }
-  },
-  child: const Text('Dismiss'),
-),
-
-            FilledButton(
-              onPressed: () {
-                if (dismissInProgress) return;
-
-                Navigator.of(dialogContext).pop();
-                // Opens the team Alerts page; incident-specific navigation
-                // can be connected when its route supports incidentId.
-                raqeebNavigatorKey.currentState?.push(
-                  MaterialPageRoute<void>(
-                    builder: (_) => const AlertsScreen(),
-                  ),
-                );
-              },
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFB83F45),
+        // A message may arrive while Flutter is still building its first frame.
+        for (var attempt = 0; attempt < 10; attempt++) {
+          if (raqeebNavigatorKey.currentState?.overlay != null) break;
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+        }
+        final navigator = raqeebNavigatorKey.currentState;
+        final context = navigator?.overlay?.context;
+        if (context == null || !context.mounted) {
+          debugPrint('FCM popup skipped: navigator not available');
+          return;
+        }
+        bool dismissInProgress = false;
+        await showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => PopScope(
+            canPop: false,
+            child: AlertDialog(
+              icon: const Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFB83F45),
+                size: 46,
               ),
-              child: const Text('View Alerts'),
+
+              title: Text(
+                tr(dialogContext, 'تنبيه رقيب', 'Raqeeb Alert'),
+                textAlign: TextAlign.center,
+              ),
+              content: Text(
+                tr(
+                  dialogContext,
+                  body.toLowerCase().contains('knife')
+                      ? 'تم اكتشاف سكين'
+                      : body.toLowerCase().contains('firearm') ||
+                            body.toLowerCase().contains('gun')
+                      ? 'تم اكتشاف سلاح ناري'
+                      : 'تم اكتشاف تهديد',
+                  body,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              actionsAlignment: MainAxisAlignment.spaceBetween,
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    if (dismissInProgress) return;
+
+                    dismissInProgress = true;
+
+                    try {
+                      await dismissRaqeebIncident(incidentId);
+
+                      if (!dialogContext.mounted) return;
+
+                      Navigator.of(dialogContext).pop();
+                    } catch (error) {
+                      if (!dialogContext.mounted) return;
+
+                      ScaffoldMessenger.of(dialogContext).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            tr(
+                              dialogContext,
+                              'تعذر استبعاد التنبيه. يرجى المحاولة مرة أخرى.',
+                              'Could not dismiss the alert. Please try again.',
+                            ),
+                          ),
+                        ),
+                      );
+                    } finally {
+                      dismissInProgress = false;
+                    }
+                  },
+                  child: Text(tr(dialogContext, 'استبعاد', 'Dismiss')),
+                ),
+
+                FilledButton(
+                  onPressed: () {
+                    if (dismissInProgress) return;
+
+                    Navigator.of(dialogContext).pop();
+                    // Opens the team Alerts page; incident-specific navigation
+                    // can be connected when its route supports incidentId.
+                    raqeebNavigatorKey.currentState?.push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const AlertsScreen(),
+                      ),
+                    );
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFB83F45),
+                  ),
+                  child: Text(
+                    tr(dialogContext, 'عرض التنبيهات', 'View Alerts'),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
-      ),
-    );
-  }).catchError((Object error, StackTrace stack) {
-    debugPrint('FCM popup error: $error');
-  });
+          ),
+        );
+      })
+      .catchError((Object error, StackTrace stack) {
+        debugPrint('FCM popup error: $error');
+      });
 }
 
 @pragma('vm:entry-point')
 Future<void> raqeebBackgroundHandler(RemoteMessage message) async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // Avoid duplicate notifications.
   if (message.notification != null) return;
@@ -192,9 +216,7 @@ Future<void> raqeebBackgroundHandler(RemoteMessage message) async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   // Listen for registration before calling register().
   FirebaseMessaging.instance.onRegistered.listen(
@@ -207,9 +229,9 @@ Future<void> main() async {
             .collection('Users')
             .doc(user.uid)
             .update({
-          'fcmInstallationId': installationId,
-          'fcmUpdatedAt': FieldValue.serverTimestamp(),
-        });
+              'fcmInstallationId': installationId,
+              'fcmUpdatedAt': FieldValue.serverTimestamp(),
+            });
 
         debugPrint('FCM registration saved successfully');
       } catch (e) {
@@ -222,21 +244,17 @@ Future<void> main() async {
   );
 
   // Register after the user signs in.
-  FirebaseAuth.instance.authStateChanges().listen(
-    (user) async {
-      if (user == null) return;
+  FirebaseAuth.instance.authStateChanges().listen((user) async {
+    if (user == null) return;
 
-      try {
-        await FirebaseMessaging.instance.register();
-      } catch (e) {
-        debugPrint('FCM registration error: $e');
-      }
-    },
-  );
+    try {
+      await FirebaseMessaging.instance.register();
+    } catch (e) {
+      debugPrint('FCM registration error: $e');
+    }
+  });
 
-  FirebaseMessaging.onBackgroundMessage(
-    raqeebBackgroundHandler,
-  );
+  FirebaseMessaging.onBackgroundMessage(raqeebBackgroundHandler);
 
   await NotificationService.instance.initialize();
 
@@ -253,36 +271,31 @@ Future<void> main() async {
     // The existing background handler still shows system notifications.
     showRaqeebForegroundAlert(
       incidentId: incidentId,
-      title: message.notification?.title ??
+      title:
+          message.notification?.title ??
           message.data['title']?.toString() ??
           'Raqeeb Alert',
-      body: message.notification?.body ??
+      body:
+          message.notification?.body ??
           message.data['body']?.toString() ??
           'Threat detected',
     );
   });
 
-
   runApp(const RaqeebApp());
 
   try {
-    final settings =
-        await FirebaseMessaging.instance.requestPermission(
+    final settings = await FirebaseMessaging.instance.requestPermission(
       alert: true,
       badge: true,
       sound: true,
     );
 
-    debugPrint(
-      'FCM Permission: ${settings.authorizationStatus}',
-    );
+    debugPrint('FCM Permission: ${settings.authorizationStatus}');
   } catch (e) {
     debugPrint('FCM Permission Error: $e');
   }
 }
-
-
-
 
 class RaqeebApp extends StatefulWidget {
   const RaqeebApp({super.key});
@@ -313,7 +326,8 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
   DateTime? _lastLocationRefresh;
   late final Stream<User?> _authStream;
 
-  bool get isDarkMode => themePreference == 'dark' ||
+  bool get isDarkMode =>
+      themePreference == 'dark' ||
       (themePreference == 'automatic' && _isNightNow);
 
   @override
@@ -325,10 +339,11 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
     _loadSettings();
     _clockTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       _checkClock();
-      if (locationMode == 'device' && themePreference == 'automatic' &&
+      if (locationMode == 'device' &&
+          themePreference == 'automatic' &&
           (_lastLocationRefresh == null ||
-           DateTime.now().difference(_lastLocationRefresh!) >
-               const Duration(minutes: 30))) {
+              DateTime.now().difference(_lastLocationRefresh!) >
+                  const Duration(minutes: 30))) {
         _refreshLocation(requestPermission: false);
       }
     });
@@ -343,8 +358,11 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
   void _checkClock() {
     bool night;
     try {
-      night = RaqeebSunTimes.isNight(DateTime.now(),
-          latitude: _latitude, longitude: _longitude);
+      night = RaqeebSunTimes.isNight(
+        DateTime.now(),
+        latitude: _latitude,
+        longitude: _longitude,
+      );
     } catch (_) {
       night = DateTime.now().hour < 6 || DateTime.now().hour >= 18;
     }
@@ -358,9 +376,12 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
     final oldManual = prefs.getBool('isDarkMode');
     setState(() {
       themePreference = ['automatic', 'light', 'dark'].contains(saved)
-          ? saved! : (oldManual == null ? 'automatic' : (oldManual ? 'dark' : 'light'));
+          ? saved!
+          : (oldManual == null ? 'automatic' : (oldManual ? 'dark' : 'light'));
       languageCode = prefs.getString('languageCode') == 'en' ? 'en' : 'ar';
-      locationMode = prefs.getString('locationMode') == 'city' ? 'city' : 'device';
+      locationMode = prefs.getString('locationMode') == 'city'
+          ? 'city'
+          : 'device';
       final city = prefs.getString('fallbackCity');
       fallbackCity = _cities.containsKey(city) ? city! : 'riyadh';
       _setFallbackCoordinates();
@@ -381,9 +402,9 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
       if (!await Geolocator.isLocationServiceEnabled()) {
         if (mounted) {
           setState(() {
-          _gpsAvailable = false;
-          _setFallbackCoordinates();
-        });
+            _gpsAvailable = false;
+            _setFallbackCoordinates();
+          });
         }
         _checkClock();
         return;
@@ -396,9 +417,9 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
           permission != LocationPermission.always) {
         if (mounted) {
           setState(() {
-          _gpsAvailable = false;
-          _setFallbackCoordinates();
-        });
+            _gpsAvailable = false;
+            _setFallbackCoordinates();
+          });
         }
         _checkClock();
         return;
@@ -512,13 +533,21 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
         stream: _authStream,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
           }
           if (snapshot.hasError) {
             return Scaffold(
-              body: Center(child: Text(tr(context,
-                  'تعذر التحقق من حالة تسجيل الدخول',
-                  'Could not verify sign-in status'))),
+              body: Center(
+                child: Text(
+                  tr(
+                    context,
+                    'تعذر التحقق من حالة تسجيل الدخول',
+                    'Could not verify sign-in status',
+                  ),
+                ),
+              ),
             );
           }
           return snapshot.data == null
@@ -534,7 +563,8 @@ class _RaqeebAppState extends State<RaqeebApp> with WidgetsBindingObserver {
                   gpsAvailable: _gpsAvailable,
                   onLocationModeChanged: _changeLocationMode,
                   onFallbackCityChanged: _changeFallbackCity,
-                  onRetryLocation: () => _refreshLocation(requestPermission: true),
+                  onRetryLocation: () =>
+                      _refreshLocation(requestPermission: true),
                 );
         },
       ),
@@ -604,12 +634,8 @@ class _MainNavigationState extends State<MainNavigation> {
     final bg = RaqeebColors.bottomBar(dark);
     final pages = <Widget>[
       const HomeScreen(),
-      HistoryScreen(
-  key: ValueKey(_historyRefreshKey),
-),
-      AlertsScreen(
-  key: ValueKey(_alertsRefreshKey),
-),
+      HistoryScreen(key: ValueKey(_historyRefreshKey)),
+      AlertsScreen(key: ValueKey(_alertsRefreshKey)),
       const ProfileScreen(),
       SettingsScreen(
         isDarkMode: dark,
@@ -639,30 +665,53 @@ class _MainNavigationState extends State<MainNavigation> {
             Transform.translate(
               offset: const Offset(0, -14),
               child: GestureDetector(
-onTap: () {
-  setState(() {
-    _alertsRefreshKey++;
-    selectedIndex = 2;
-  });
-},                child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  Container(
-                    width: 56, height: 56,
-                    decoration: BoxDecoration(
-                      color: dark ? const Color(0xFF862B2B) : RaqeebColors.lightDanger,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: bg, width: 4),
+                onTap: () {
+                  setState(() {
+                    _alertsRefreshKey++;
+                    selectedIndex = 2;
+                  });
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: dark
+                            ? const Color(0xFF862B2B)
+                            : RaqeebColors.lightDanger,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: bg, width: 4),
+                      ),
+                      child: const Icon(
+                        Icons.notifications_active_rounded,
+                        color: Colors.white,
+                        size: 27,
+                      ),
                     ),
-                    child: const Icon(Icons.notifications_active_rounded,
-                        color: Colors.white, size: 27),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(tr(context, 'التنبيهات', 'Alerts'), style: TextStyle(
-                      color: RaqeebColors.text(dark), fontSize: 10)),
-                ]),
+                    const SizedBox(height: 2),
+                    Text(
+                      tr(context, 'التنبيهات', 'Alerts'),
+                      style: TextStyle(
+                        color: RaqeebColors.text(dark),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-            _navItem(Icons.person_outline_rounded, tr(context, 'حسابي', 'Profile'), 3),
-            _navItem(Icons.settings_outlined, tr(context, 'الإعدادات', 'Settings'), 4),
+            _navItem(
+              Icons.person_outline_rounded,
+              tr(context, 'حسابي', 'Profile'),
+              3,
+            ),
+            _navItem(
+              Icons.settings_outlined,
+              tr(context, 'الإعدادات', 'Settings'),
+              4,
+            ),
           ],
         ),
       ),
@@ -674,28 +723,42 @@ onTap: () {
     final selected = selectedIndex == index;
     return InkWell(
       onTap: () {
-  setState(() {
-    if (index == 1) {
-      _historyRefreshKey++;
-    } else if (index == 2) {
-      _alertsRefreshKey++;
-    }
+        setState(() {
+          if (index == 1) {
+            _historyRefreshKey++;
+          } else if (index == 2) {
+            _alertsRefreshKey++;
+          }
 
-    selectedIndex = index;
-  });
-},
+          selectedIndex = index;
+        });
+      },
       borderRadius: BorderRadius.circular(12),
       child: SizedBox(
         width: 64,
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon,
-              color: selected ? RaqeebColors.accent(dark) : RaqeebColors.secondary(dark),
-              size: 24),
-          const SizedBox(height: 5),
-          Text(label, style: TextStyle(
-              color: selected ? RaqeebColors.text(dark) : RaqeebColors.secondary(dark),
-              fontSize: 10, fontWeight: selected ? FontWeight.bold : FontWeight.normal)),
-        ]),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              color: selected
+                  ? RaqeebColors.accent(dark)
+                  : RaqeebColors.secondary(dark),
+              size: 24,
+            ),
+            const SizedBox(height: 5),
+            Text(
+              label,
+              style: TextStyle(
+                color: selected
+                    ? RaqeebColors.text(dark)
+                    : RaqeebColors.secondary(dark),
+                fontSize: 10,
+                fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -710,9 +773,16 @@ class PlaceholderPage extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       appBar: AppBar(title: Text(title), centerTitle: true),
-      body: Center(child: Text(tr(context,
-        'سيتم تطوير هذه الصفحة لاحقًا', 'This page will be developed later'),
-        style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 16))),
+      body: Center(
+        child: Text(
+          tr(
+            context,
+            'سيتم تطوير هذه الصفحة لاحقًا',
+            'This page will be developed later',
+          ),
+          style: TextStyle(color: RaqeebColors.secondary(dark), fontSize: 16),
+        ),
+      ),
     );
   }
 }
